@@ -1,0 +1,41 @@
+[project]
+name = "bungalo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.1.8",
+    "nut2>=2.1.1",
+    "pydantic>=2.11.3",
+    "rich>=14.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.399",
+    "pytest>=8.3.5",
+    "ruff>=0.11.5",
+]
+
+[project.scripts]
+bungalo = "bungalo.main:cli"
+
+[tool.ruff.lint]
+# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
+# Disable print statements
+select = ["E4", "E7", "E9", "F", "I001", "T201"]
+
+[tool.ruff.lint.isort]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+combine-as-imports = true
