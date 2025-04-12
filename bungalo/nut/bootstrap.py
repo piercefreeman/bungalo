@@ -36,6 +36,53 @@ class NutFailedToStart(Exception):
         )
 
 
+async def check_existing_bootstrap(ups_conf_path: str):
+    # For now we assume that if ups.conf exists we've already bootstrapped the entries
+    # We can't read the contents of the file because our non-sudo executing user won't
+    # have the permissions to do so
+    if not os.path.exists(ups_conf_path):
+        return False
+
+    LOGGER.info("UPS device entry already exists in NUT configuration")
+    CONSOLE.print("NUT already configured with UPS device")
+
+    # Check if services are running and start them if needed
+    services = ["nut-driver", "nut-server", "nut-client"]
+    services_to_start: list[str] = []
+
+    # Check service status without sudo
+    for service in services:
+        try:
+            status = subprocess.run(
+                ["systemctl", "is-active", service],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if status.stdout.strip() != "active":
+                LOGGER.info(f"{service} is not running")
+                services_to_start.append(service)
+            else:
+                LOGGER.info(f"{service} is already running")
+        except Exception as e:
+            LOGGER.error(f"Error checking {service} status: {str(e)}")
+            services_to_start.append(service)
+
+    # Start services that aren't running
+    if services_to_start:
+        LOGGER.info("Starting inactive services...")
+        for service in services_to_start:
+            try:
+                subprocess.run(["sudo", "systemctl", "start", service], check=True)
+                await asyncio.sleep(2)  # Give service time to start
+                LOGGER.info(f"Started {service}")
+            except subprocess.CalledProcessError as e:
+                LOGGER.error(f"Failed to start {service}: {str(e)}")
+                raise NutFailedToStart(f"Failed to start {service}")
+
+    return True
+
+
 async def bootstrap_nut():
     """
     Bootstrap the NUT installation and configuration on Linux systems.
@@ -46,13 +93,7 @@ async def bootstrap_nut():
         return False, "Bootstrap is only supported on Linux systems"
 
     ups_conf_path = "/etc/nut/ups.conf"
-
-    # For now we assume that if ups.conf exists we've already bootstrapped the entries
-    # We can't read the contents of the file because our non-sudo executing user won't
-    # have the permissions to do so
-    if os.path.exists(ups_conf_path):
-        LOGGER.info("UPS device entry already exists in NUT configuration")
-        CONSOLE.print("NUT already configured with UPS device")
+    if await check_existing_bootstrap(ups_conf_path):
         return
 
     # Install NUT
@@ -74,10 +115,10 @@ async def bootstrap_nut():
     )
     subprocess.run(["sudo", "chmod", "750", "/etc/nut"], check=True)
 
-    # Configure NUT to run in standalone mode
+    # Configure NUT to run in standalone mode. Unexpectedly this is a command versus a simple key=value pair
     LOGGER.info("Configuring NUT...")
     with open(nut_conf_path, "w") as f:
-        f.write(Section(dict_values={"MODE": "standalone"}).render())
+        f.write(Section(list_values=[Command(values=["MODE=standalone"])]).render())
 
     # Create basic ups.conf with required settings
     with open(ups_conf_path, "w") as f:

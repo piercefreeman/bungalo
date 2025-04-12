@@ -1,6 +1,5 @@
 import asyncio
 import sys
-from contextlib import asynccontextmanager
 from typing import Annotated, Dict, Optional
 
 import nut2 as nut
@@ -50,7 +49,9 @@ class UPSMonitor:
             client = await asyncio.to_thread(
                 nut.PyNUTClient, host=self.host, port=self.port
             )
-            LOGGER.debug("Connected to NUT server, fetching variables...")
+            LOGGER.debug(
+                f"Connected to NUT server, fetching variables for '{self.ups_name}'..."
+            )
             vars = await asyncio.to_thread(client.list_vars, self.ups_name)
             if not vars:
                 LOGGER.warning(f"No variables returned for UPS '{self.ups_name}'")
@@ -75,29 +76,28 @@ class UPSMonitor:
         LOGGER.info(f"Raw status payload: {status}")
 
         # Check ups.status variable
-        status = StatusSummary.model_validate(status)
-        if not status.statuses:
+        summary = StatusSummary.model_validate(status)
+        if not summary.statuses:
             LOGGER.warning("No 'ups.status' variable found in status data")
             return None
 
         # Log all detected statuses
-        for status in status.statuses:
+        for status in summary.statuses:
             LOGGER.debug(f"Detected UPS status: {status.name}")
 
         # Determine if we're on battery
-        is_battery = status.statuses.is_on_battery()
+        is_battery = summary.statuses.is_on_battery()
         if is_battery:
             LOGGER.warning("UPS is running on battery power")
         elif is_battery is False:
             LOGGER.info("UPS is running on utility power")
         else:
             LOGGER.warning(
-                f"Could not determine power state from statuses: {[s.name for s in status.statuses]}"
+                f"Could not determine power state from statuses: {[s.name for s in summary.statuses]}"
             )
 
-        return status
+        return summary
 
-    @asynccontextmanager
     async def poll(self, interval_seconds: int = 10):
         """
         Continuously poll the UPS status. Yields when there is a change in the UPS status.
@@ -143,4 +143,5 @@ async def main():
 
     # Update these values based on your NUT server configuration
     monitor = UPSMonitor(host="localhost", port=NUT_SERVER_PORT, ups_name="ups")
-    await monitor.poll_status()
+    async for status in monitor.poll():
+        CONSOLE.print(f"[green]UPS status changed: {status}[/green]")

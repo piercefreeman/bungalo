@@ -36,8 +36,8 @@ class Section(BaseModel):
     """
 
     title: str | None = None
-    list_values: list[VALUE_TYPE | Command]
-    dict_values: dict[str, VALUE_TYPE | Command]
+    list_values: list[VALUE_TYPE | Command] = []
+    dict_values: dict[str, VALUE_TYPE | Command] = {}
 
     def render(self) -> str:
         payload = ""

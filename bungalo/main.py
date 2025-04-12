@@ -1,7 +1,7 @@
 from click import group
 
-from bungalo.battery.battery import main as battery_main
 from bungalo.io import async_to_sync
+from bungalo.nut.battery import main as battery_main
 
 
 @group()
