@@ -1,6 +1,6 @@
 import asyncio
 import sys
-from typing import Annotated, Dict, Optional
+from typing import Annotated, Dict
 
 import nut2 as nut
 from pydantic import BaseModel, Field
@@ -12,7 +12,7 @@ from bungalo.nut.status import UPSStatuses
 
 
 class StatusSummary(BaseModel):
-    statuses: Annotated[UPSStatuses | None, Field(alias="ups.status")] = None
+    statuses: Annotated[UPSStatuses, Field(alias="ups.status")]
     battery_charge: Annotated[int | None, Field(alias="battery.charge")] = None
     runtime: Annotated[int | None, Field(alias="battery.runtime")] = None  # seconds
     load: Annotated[int | None, Field(alias="ups.load")] = None
@@ -62,24 +62,21 @@ class UPSMonitor:
             LOGGER.error(f"Error getting UPS status: {str(e)}", exc_info=True)
             return {}
 
-    def _parse_status(self, status: Dict[str, str]) -> Optional[bool]:
+    def _parse_status(self, raw_status: dict[str, str]) -> StatusSummary | None:
         """
         Parse the UPS status to determine if it's on battery.
 
         :param status: Dictionary of UPS variables
         :return: True if on battery, False if on AC, None if unknown
         """
-        if not status:
+        if not raw_status:
             LOGGER.warning("No status data available to parse")
             return None
 
-        LOGGER.info(f"Raw status payload: {status}")
+        LOGGER.info(f"Raw status payload: {raw_status}")
 
         # Check ups.status variable
-        summary = StatusSummary.model_validate(status)
-        if not summary.statuses:
-            LOGGER.warning("No 'ups.status' variable found in status data")
-            return None
+        summary = StatusSummary.model_validate(raw_status)
 
         # Log all detected statuses
         for status in summary.statuses:
@@ -114,11 +111,17 @@ class UPSMonitor:
                     LOGGER.debug(f"Raw UPS status data: {raw_status}")
                 status = self._parse_status(raw_status)
 
+                if not status:
+                    LOGGER.warning("No status data available to poll")
+                    continue
+
                 # Only yield differences in the charge state or the charge level
                 if (
                     last_status is None
-                    or last_status.statuses.is_on_battery()
-                    != status.statuses.is_on_battery()
+                    or (
+                        last_status.statuses.is_on_battery()
+                        != status.statuses.is_on_battery()
+                    )
                     or last_status.battery_charge != status.battery_charge
                 ):
                     yield status

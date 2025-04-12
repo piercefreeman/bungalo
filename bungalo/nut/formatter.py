@@ -50,7 +50,7 @@ class Section(BaseModel):
         return payload
 
 
-def format_python_value(value: VALUE_TYPE) -> str:
+def format_python_value(value: VALUE_TYPE | Command) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     elif isinstance(value, int):

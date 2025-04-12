@@ -203,9 +203,10 @@ async def bootstrap_nut():
 
     # Ensure NUT can access USB devices
     LOGGER.info("Setting up USB permissions...")
-    subprocess.run(
-        ["sudo", "usermod", "-a", "-G", "nut", os.getenv("USER")], check=True
-    )
+    user_name = os.getenv("USER")
+    if not user_name:
+        raise NutFailedToStart("Failed to get user name")
+    subprocess.run(["sudo", "usermod", "-a", "-G", "nut", user_name], check=True)
     subprocess.run(["sudo", "udevadm", "control", "--reload-rules"], check=True)
 
     # Stop all NUT services first
