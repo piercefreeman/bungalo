@@ -1,16 +1,20 @@
 name: Test
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled]
 
 jobs:
   lint:
     name: Python Lint & Type Check
     runs-on: ubuntu-latest
-    on:
-      push:
-        branches:
-          - main
-      pull_request:
-        branches:
-          - main
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -21,12 +25,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version-file: ".python-version"
-          cache: "uv"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
-          uv pip install ruff pyright
+          uv sync
 
       - name: Run linting and type checking
         run: make lint CHECK_ONLY=true 
