@@ -1,4 +1,18 @@
+from dataclasses import dataclass
 from enum import Enum
+
+
+@dataclass
+class StatusDefinition:
+    status_codes: str | set[str]
+
+    def matches_status(self, status_str: str) -> bool:
+        status_codes = (
+            self.status_codes
+            if isinstance(self.status_codes, set)
+            else {self.status_codes}
+        )
+        return any(code in status_str for code in status_codes)
 
 
 class UPSStatus(Enum):
@@ -7,25 +21,42 @@ class UPSStatus(Enum):
     """
 
     # Primary states
-    ONLINE = ("ol", "online")  # On utility power
-    ON_BATTERY = ("ob", "onbatt")  # On battery power
-    LOW_BATTERY = ("lb",)  # Low battery
-    REPLACE_BATTERY = ("rb",)  # Replace battery
-    CHARGING = ("chrg",)  # Battery charging
-    DISCHARGING = ("dischrg",)  # Battery discharging
-    BYPASS = ("bypass",)  # Bypass active
-    CALIBRATING = ("cal",)  # Calibration in progress
-    OFFLINE = ("off",)  # UPS is offline
-    OVERLOADED = ("over",)  # UPS is overloaded
-    TRIMMING = ("trim",)  # Trimming voltage
-    BOOSTING = ("boost",)  # Boosting voltage
-    FORCED_SHUTDOWN = ("fsd",)  # Forced shutdown
+    ONLINE = StatusDefinition({"ol", "online"})  # On utility power
+    ON_BATTERY = StatusDefinition({"ob", "onbatt"})  # On battery power
+    LOW_BATTERY = StatusDefinition("lb")  # Low battery
+    REPLACE_BATTERY = StatusDefinition("rb")  # Replace battery
+    CHARGING = StatusDefinition("chrg")  # Battery charging
+    DISCHARGING = StatusDefinition("dischrg")  # Battery discharging
+    BYPASS = StatusDefinition("bypass")  # Bypass active
+    CALIBRATING = StatusDefinition("cal")  # Calibration in progress
+    OFFLINE = StatusDefinition("off")  # UPS is offline
+    OVERLOADED = StatusDefinition("over")  # UPS is overloaded
+    TRIMMING = StatusDefinition("trim")  # Trimming voltage
+    BOOSTING = StatusDefinition("boost")  # Boosting voltage
+    FORCED_SHUTDOWN = StatusDefinition("fsd")  # Forced shutdown
 
-    def __init__(self, *status_codes: str):
-        self.status_codes = status_codes
 
-    @classmethod
-    def parse(cls, status_str: str) -> set["UPSStatus"]:
+class UPSStatuses(list[UPSStatus]):
+    def __init__(self, status_str: str):
+        self.statuses = self._parse(status_str)
+
+    def is_on_battery(self) -> bool | None:
+        """
+        Determine if the UPS is running on battery from a set of statuses.
+
+        :param statuses: Set of UPSStatus enums
+        :return: True if on battery, False if on utility power, None if unknown
+        """
+        if (
+            UPSStatus.ON_BATTERY in self.statuses
+            or UPSStatus.DISCHARGING in self.statuses
+        ):
+            return True
+        elif UPSStatus.ONLINE in self.statuses or UPSStatus.CHARGING in self.statuses:
+            return False
+        return None
+
+    def _parse(self, status_str: str) -> set[UPSStatus]:
         """
         Parse a NUT status string into a set of UPS statuses.
 
@@ -33,22 +64,4 @@ class UPSStatus(Enum):
         :return: Set of matching UPSStatus enums
         """
         status_str = status_str.lower()
-        return {
-            status
-            for status in cls
-            if any(code in status_str for code in status.status_codes)
-        }
-
-    @classmethod
-    def is_on_battery(cls, statuses: set["UPSStatus"]) -> bool | None:
-        """
-        Determine if the UPS is running on battery from a set of statuses.
-
-        :param statuses: Set of UPSStatus enums
-        :return: True if on battery, False if on utility power, None if unknown
-        """
-        if cls.ON_BATTERY in statuses or cls.DISCHARGING in statuses:
-            return True
-        elif cls.ONLINE in statuses or cls.CHARGING in statuses:
-            return False
-        return None
+        return {status for status in UPSStatus if status.matches_status(status_str)}

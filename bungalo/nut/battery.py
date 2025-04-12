@@ -1,13 +1,23 @@
 import asyncio
 import sys
-from typing import Dict, Optional
+from contextlib import asynccontextmanager
+from typing import Annotated, Dict, Optional
 
 import nut2 as nut
+from pydantic import BaseModel, Field
 
 from bungalo.constants import NUT_SERVER_PORT
 from bungalo.logger import CONSOLE, LOGGER
 from bungalo.nut.bootstrap import bootstrap_nut
-from bungalo.nut.status import UPSStatus
+from bungalo.nut.status import UPSStatuses
+
+
+class StatusSummary(BaseModel):
+    statuses: Annotated[UPSStatuses | None, Field(alias="ups.status")] = None
+    battery_charge: Annotated[int | None, Field(alias="battery.charge")] = None
+    runtime: Annotated[int | None, Field(alias="battery.runtime")] = None  # seconds
+    load: Annotated[int | None, Field(alias="ups.load")] = None
+    temperature: Annotated[int | None, Field(alias="ups.temperature")] = None
 
 
 class UPSMonitor:
@@ -27,7 +37,6 @@ class UPSMonitor:
         self.host = host
         self.port = port
         self.ups_name = ups_name
-        self._last_status: Optional[Dict[str, str]] = None
 
     async def get_status(self) -> Dict[str, str]:
         """
@@ -47,7 +56,6 @@ class UPSMonitor:
                 LOGGER.warning(f"No variables returned for UPS '{self.ups_name}'")
             else:
                 LOGGER.debug(f"Retrieved {len(vars)} variables from UPS")
-            self._last_status = vars
             return vars
         except Exception as e:
             LOGGER.error(f"Error getting UPS status: {str(e)}", exc_info=True)
@@ -64,96 +72,58 @@ class UPSMonitor:
             LOGGER.warning("No status data available to parse")
             return None
 
+        LOGGER.info(f"Raw status payload: {status}")
+
         # Check ups.status variable
-        ups_status = status.get("ups.status", "")
-        if not ups_status:
+        status = StatusSummary.model_validate(status)
+        if not status.statuses:
             LOGGER.warning("No 'ups.status' variable found in status data")
             return None
 
-        LOGGER.info(f"Current UPS status: {ups_status}")
-
-        # Parse the status string into UPSStatus enums
-        statuses = UPSStatus.parse(ups_status)
-        if not statuses:
-            LOGGER.warning(f"Unknown UPS status value: {ups_status}")
-            return None
-
         # Log all detected statuses
-        for status in statuses:
+        for status in status.statuses:
             LOGGER.debug(f"Detected UPS status: {status.name}")
 
         # Determine if we're on battery
-        is_battery = UPSStatus.is_on_battery(statuses)
+        is_battery = status.statuses.is_on_battery()
         if is_battery:
             LOGGER.warning("UPS is running on battery power")
         elif is_battery is False:
             LOGGER.info("UPS is running on utility power")
         else:
             LOGGER.warning(
-                f"Could not determine power state from statuses: {[s.name for s in statuses]}"
+                f"Could not determine power state from statuses: {[s.name for s in status.statuses]}"
             )
 
-        return is_battery
+        return status
 
-    def get_status_summary(self, status: Dict[str, str]) -> str:
+    @asynccontextmanager
+    async def poll(self, interval_seconds: int = 10):
         """
-        Get a human-readable summary of the UPS status.
-
-        :param status: Dictionary of UPS variables
-        :return: Formatted status summary
-        """
-        summary = []
-
-        battery_charge = status.get("battery.charge")
-        if battery_charge:
-            summary.append(f"🔋 Battery charge: {battery_charge}%")
-
-        runtime = status.get("battery.runtime")
-        if runtime:
-            minutes = int(runtime) // 60
-            summary.append(f"⏱️ Runtime remaining: {minutes} minutes")
-
-        load = status.get("ups.load")
-        if load:
-            summary.append(f"⚡ Load: {load}%")
-
-        temperature = status.get("ups.temperature")
-        if temperature:
-            summary.append(f"🌡️ Temperature: {temperature}°C")
-
-        return "\n".join(summary)
-
-    async def poll_status(self, interval_seconds: int = 10):
-        """
-        Continuously poll the UPS status and print the power state.
+        Continuously poll the UPS status. Yields when there is a change in the UPS status.
 
         :param interval_seconds: Time between status checks in seconds
         """
         LOGGER.info(f"Starting UPS status monitoring for {self.host}")
+        last_status: StatusSummary | None = None
         while True:
             try:
                 LOGGER.debug("Polling UPS status...")
-                status = await self.get_status()
-                if status:
-                    LOGGER.debug(f"Raw UPS status data: {status}")
-                is_on_battery = self._parse_status(status)
+                raw_status = await self.get_status()
+                if raw_status:
+                    LOGGER.debug(f"Raw UPS status data: {raw_status}")
+                status = self._parse_status(raw_status)
 
-                if is_on_battery is None:
-                    LOGGER.warning(
-                        "Could not determine UPS status - check if UPS is properly connected and detected"
-                    )
-                elif is_on_battery:
-                    LOGGER.warning("UPS is on battery power!")
-                else:
-                    LOGGER.info("UPS is on utility power")
+                # Only yield differences in the charge state or the charge level
+                if (
+                    last_status is None
+                    or last_status.statuses.is_on_battery()
+                    != status.statuses.is_on_battery()
+                    or last_status.battery_charge != status.battery_charge
+                ):
+                    yield status
 
-                summary = self.get_status_summary(status)
-                if summary:
-                    LOGGER.info("\n" + summary)
-                else:
-                    LOGGER.warning(
-                        "No status summary available - check if UPS is responding with data"
-                    )
+                last_status = status
 
             except Exception as e:
                 LOGGER.error(f"Error polling UPS: {str(e)}", exc_info=True)
