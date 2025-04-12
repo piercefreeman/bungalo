@@ -6,22 +6,90 @@ import logging
 import nut2 as nut
 import sys
 import os
+from enum import Enum, auto
 
+# Configure logging with a more detailed format and ensure we capture debug and above
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True  # Override any existing logging configuration
 )
+
+# Get logger for this module specifically
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# Port hosting our local watch server
+NUT_SERVER_PORT = 3493
+
+class UPSStatus(Enum):
+    """
+    Standard NUT UPS status codes and their meanings.
+    """
+    # Primary states
+    ONLINE = ('ol', 'online')  # On utility power
+    ON_BATTERY = ('ob', 'onbatt')  # On battery power
+    LOW_BATTERY = ('lb',)  # Low battery
+    REPLACE_BATTERY = ('rb',)  # Replace battery
+    CHARGING = ('chrg',)  # Battery charging
+    DISCHARGING = ('dischrg',)  # Battery discharging
+    BYPASS = ('bypass',)  # Bypass active
+    CALIBRATING = ('cal',)  # Calibration in progress
+    OFFLINE = ('off',)  # UPS is offline
+    OVERLOADED = ('over',)  # UPS is overloaded
+    TRIMMING = ('trim',)  # Trimming voltage
+    BOOSTING = ('boost',)  # Boosting voltage
+    FORCED_SHUTDOWN = ('fsd',)  # Forced shutdown
+
+    def __init__(self, *status_codes: str):
+        self.status_codes = status_codes
+
+    @classmethod
+    def parse(cls, status_str: str) -> set['UPSStatus']:
+        """
+        Parse a NUT status string into a set of UPS statuses.
+        
+        :param status_str: Raw status string from NUT
+        :return: Set of matching UPSStatus enums
+        """
+        status_str = status_str.lower()
+        return {
+            status for status in cls 
+            if any(code in status_str for code in status.status_codes)
+        }
+
+    @classmethod
+    def is_on_battery(cls, statuses: set['UPSStatus']) -> Optional[bool]:
+        """
+        Determine if the UPS is running on battery from a set of statuses.
+        
+        :param statuses: Set of UPSStatus enums
+        :return: True if on battery, False if on utility power, None if unknown
+        """
+        if cls.ON_BATTERY in statuses or cls.DISCHARGING in statuses:
+            return True
+        elif cls.ONLINE in statuses or cls.CHARGING in statuses:
+            return False
+        return None
 
 async def bootstrap_nut() -> Tuple[bool, str]:
     """
     Bootstrap the NUT installation and configuration on Linux systems.
+    Only proceeds if the UPS device entry doesn't already exist.
     
     :return: Tuple of (success: bool, message: str)
     """
     if sys.platform != "linux":
         return False, "Bootstrap is only supported on Linux systems"
     
+    ups_conf_path = "/etc/nut/ups.conf"
+    
+    # For now we assume that if ups.conf exists we've already bootstrapped the entries
+    # We can't read the contents of the file because our non-sudo executing user won't
+    # have the permissions to do so
+    if os.path.exists(ups_conf_path):
+        logger.info("UPS device entry already exists in NUT configuration")
+        return True, "NUT already configured with UPS device"
+
     try:
         # Install NUT
         logger.info("Installing NUT packages...")
@@ -30,7 +98,6 @@ async def bootstrap_nut() -> Tuple[bool, str]:
         
         # Basic NUT configuration
         nut_conf_path = "/etc/nut/nut.conf"
-        ups_conf_path = "/etc/nut/ups.conf"
         upsd_conf_path = "/etc/nut/upsd.conf"
         users_conf_path = "/etc/nut/upsd.users"
         upsmon_conf_path = "/etc/nut/upsmon.conf"
@@ -57,8 +124,8 @@ async def bootstrap_nut() -> Tuple[bool, str]:
         
         # Create upsd.conf with network settings
         with open(upsd_conf_path, 'w') as f:
-            f.write('LISTEN 127.0.0.1 3493\n')
-            f.write('LISTEN ::1 3493\n')
+            f.write(f'LISTEN 127.0.0.1 {NUT_SERVER_PORT}\n')
+            f.write(f'LISTEN ::1 {NUT_SERVER_PORT}\n')
             f.write('MAXAGE 15\n')
         
         # Create upsd.users with admin user
@@ -167,12 +234,12 @@ async def bootstrap_nut() -> Tuple[bool, str]:
         return False, f"Unexpected error during installation: {str(e)}"
 
 class UPSMonitor:
-    def __init__(self, host: str = "localhost", port: int = 3493, ups_name: str = "ups"):
+    def __init__(self, host: str = "localhost", port: int = NUT_SERVER_PORT, ups_name: str = "ups"):
         """
         Initialize the UPS monitor using NUT (Network UPS Tools).
         
         :param host: Hostname or IP of the NUT server
-        :param port: Port number of the NUT server (default: 3493)
+        :param port: Port number of the NUT server (default: NUT_SERVER_PORT)
         :param ups_name: Name of the UPS device as configured in NUT
         """
         self.host = host
@@ -188,12 +255,18 @@ class UPSMonitor:
         """
         try:
             # Run the blocking NUT operations in a thread pool
+            logger.info(f"Connecting to NUT server at {self.host}:{self.port}")
             client = await asyncio.to_thread(nut.PyNUTClient, host=self.host, port=self.port)
+            logger.debug("Connected to NUT server, fetching variables...")
             vars = await asyncio.to_thread(client.list_vars, self.ups_name)
+            if not vars:
+                logger.warning(f"No variables returned for UPS '{self.ups_name}'")
+            else:
+                logger.debug(f"Retrieved {len(vars)} variables from UPS")
             self._last_status = vars
             return vars
         except Exception as e:
-            logger.error(f"Error getting UPS status: {e}")
+            logger.error(f"Error getting UPS status: {str(e)}", exc_info=True)
             return {}
 
     def _parse_status(self, status: Dict[str, str]) -> Optional[bool]:
@@ -204,15 +277,37 @@ class UPSMonitor:
         :return: True if on battery, False if on AC, None if unknown
         """
         if not status:
+            logger.warning("No status data available to parse")
             return None
             
         # Check ups.status variable
-        ups_status = status.get('ups.status', '').lower()
-        if 'onbatt' in ups_status:
-            return True
-        elif 'online' in ups_status:
-            return False
-        return None
+        ups_status = status.get('ups.status', '')
+        if not ups_status:
+            logger.warning("No 'ups.status' variable found in status data")
+            return None
+
+        logger.info(f"Current UPS status: {ups_status}")
+        
+        # Parse the status string into UPSStatus enums
+        statuses = UPSStatus.parse(ups_status)
+        if not statuses:
+            logger.warning(f"Unknown UPS status value: {ups_status}")
+            return None
+
+        # Log all detected statuses
+        for status in statuses:
+            logger.debug(f"Detected UPS status: {status.name}")
+        
+        # Determine if we're on battery
+        is_battery = UPSStatus.is_on_battery(statuses)
+        if is_battery:
+            logger.warning("UPS is running on battery power")
+        elif is_battery is False:
+            logger.info("UPS is running on utility power")
+        else:
+            logger.warning(f"Could not determine power state from statuses: {[s.name for s in statuses]}")
+        
+        return is_battery
 
     def get_status_summary(self, status: Dict[str, str]) -> str:
         """
@@ -251,11 +346,14 @@ class UPSMonitor:
         logger.info(f"Starting UPS status monitoring for {self.host}")
         while True:
             try:
+                logger.debug("Polling UPS status...")
                 status = await self.get_status()
+                if status:
+                    logger.debug(f"Raw UPS status data: {status}")
                 is_on_battery = self._parse_status(status)
                 
                 if is_on_battery is None:
-                    logger.warning("Could not determine UPS status")
+                    logger.warning("Could not determine UPS status - check if UPS is properly connected and detected")
                 elif is_on_battery:
                     logger.warning("UPS is on battery power!")
                 else:
@@ -264,10 +362,13 @@ class UPSMonitor:
                 summary = self.get_status_summary(status)
                 if summary:
                     logger.info("\n" + summary)
+                else:
+                    logger.warning("No status summary available - check if UPS is responding with data")
                     
             except Exception as e:
-                logger.error(f"Error polling UPS: {e}")
+                logger.error(f"Error polling UPS: {str(e)}", exc_info=True)
             
+            logger.debug(f"Waiting {interval_seconds} seconds before next poll...")
             await asyncio.sleep(interval_seconds)
 
 async def main():
@@ -280,11 +381,8 @@ async def main():
     
     # Update these values based on your NUT server configuration
     monitor = UPSMonitor(
-        host="localhost",  # Change this to your NUT server address
-        port=3493,
-        ups_name="ups"    # Change this to match your UPS name in NUT
+        host="localhost",
+        port=NUT_SERVER_PORT,
+        ups_name="ups"
     )
     await monitor.poll_status()
-
-if __name__ == "__main__":
-    asyncio.run(main()) 
