@@ -1,3 +1,4 @@
+import asyncio
 import sys
 
 from bungalo.config import BungaloConfig
@@ -29,10 +30,21 @@ async def main(config: BungaloConfig):
     )
     slack_client = SlackClient(config.slack_webhook_url)
 
-    clients_shutdown = False
+    await asyncio.gather(
+        poll_task(client_manager, slack_client, config),
+        healthcheck_task(client_manager, slack_client),
+    )
 
+
+async def poll_task(
+    client_manager: ClientManager,
+    slack_client: SlackClient,
+    config: BungaloConfig,
+):
     # Update these values based on your NUT server configuration
     monitor = UPSMonitor(host="localhost", port=NUT_SERVER_PORT, ups_name="ups")
+    clients_shutdown = False
+
     async for status in monitor.poll():
         CONSOLE.print(f"[green]UPS status changed: {status}[/green]")
 
@@ -69,3 +81,16 @@ async def main(config: BungaloConfig):
             )
             await client_manager.wake_clients()
             clients_shutdown = False
+
+
+async def healthcheck_task(
+    client_manager: ClientManager, slack_client: SlackClient, interval: int = 5 * 60
+):
+    while True:
+        results = await client_manager.healthcheck()
+        failed_clients = [client for client, status in results.items() if not status]
+        if failed_clients:
+            await slack_client.send_message(
+                f"Failed to connect to {', '.join(failed_clients)}"
+            )
+        await asyncio.sleep(interval)

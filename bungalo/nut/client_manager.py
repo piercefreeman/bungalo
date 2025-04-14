@@ -78,7 +78,7 @@ class ClientManager:
                     client.hostname, client.username
                 ) as conn:
                     # Try to execute a simple command to verify connection
-                    await conn.run('echo "Connection test"')
+                    await conn.run('echo "Connection test"', timeout=10)
                     results[key] = True
                     CONSOLE.print(
                         f"[green]SSH health check succeeded for {key}[/green]"
