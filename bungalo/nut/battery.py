@@ -1,13 +1,11 @@
 import asyncio
-import sys
 from typing import Annotated, Dict
 
 import nut2 as nut
 from pydantic import BaseModel, Field
 
 from bungalo.constants import NUT_SERVER_PORT
-from bungalo.logger import CONSOLE, LOGGER
-from bungalo.nut.bootstrap import bootstrap_nut
+from bungalo.logger import LOGGER
 from bungalo.nut.status import UPSStatuses
 
 
@@ -133,18 +131,3 @@ class UPSMonitor:
 
             LOGGER.debug(f"Waiting {interval_seconds} seconds before next poll...")
             await asyncio.sleep(interval_seconds)
-
-
-async def main():
-    # First try to bootstrap NUT if we're on Linux
-    if sys.platform == "linux":
-        try:
-            await bootstrap_nut()
-        except Exception as e:
-            CONSOLE.print(f"[red]Failed to bootstrap NUT: {e}[/red]")
-            sys.exit(1)
-
-    # Update these values based on your NUT server configuration
-    monitor = UPSMonitor(host="localhost", port=NUT_SERVER_PORT, ups_name="ups")
-    async for status in monitor.poll():
-        CONSOLE.print(f"[green]UPS status changed: {status}[/green]")
