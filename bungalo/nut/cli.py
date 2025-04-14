@@ -28,7 +28,7 @@ async def main(config: BungaloConfig):
             for client in config.managed_hardware
         ]
     )
-    slack_client = SlackClient(config.slack_webhook_url)
+    slack_client = SlackClient(config.root.slack_webhook_url)
 
     await asyncio.gather(
         poll_task(client_manager, slack_client, config),
@@ -57,7 +57,7 @@ async def poll_task(
             await slack_client.send_message(f"Battery at {status.battery_charge}%")
 
         if (
-            status.battery_charge <= config.nut_shutdown_threshold
+            status.battery_charge <= config.nut.shutdown_threshold
             and not clients_shutdown
             and status.statuses.is_on_battery()
         ):
@@ -71,7 +71,7 @@ async def poll_task(
             )
             clients_shutdown = True
         elif (
-            status.battery_charge >= config.nut_startup_threshold
+            status.battery_charge >= config.nut.startup_threshold
             and clients_shutdown
             and not status.statuses.is_on_battery()
         ):

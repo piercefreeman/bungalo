@@ -34,21 +34,7 @@ The `SSHManager` manages a local bungalo ssh credential that we place into the b
 
 ### Config
 
-To configure the server behavior, add a config file to: `~/.bungalo/config.toml`:
-
-```toml
-slack_webhook_url: https://hooks.slack.com/...
-
-[[managed_hardware]]
-  name: NAS
-  local_ip: 192.168.1.172
-  username: root
-
-[[managed_hardware]]
-  name: Dream Machine
-  local_ip: 192.168.1.1
-  username: root
-```
+To configure the server behavior, add a config file to: `~/.bungalo/config.toml`. See `config.example.toml` for the expected format.
 
 ## Future Work
 
@@ -66,6 +52,7 @@ slack_webhook_url: https://hooks.slack.com/...
 3. Run the container in privileged mode to access USB devices. See `setup.sh` for the latest command that's run during auto-setup.
 
    ```bash
+   docker rm -f bungalo
    docker run -d \
      --name bungalo \
      --restart=always \
