@@ -58,6 +58,7 @@ To configure the server behavior, add a config file to: `~/.bungalo/config.toml`
      --restart=always \
      --privileged \
      --network host \
+     --device=/dev/bus/usb \
      -v ~/.bungalo:/root/.bungalo \
      -v /dev/bus/usb:/dev/bus/usb \
      bungalo
@@ -68,3 +69,15 @@ To configure the server behavior, add a config file to: `~/.bungalo/config.toml`
    - `--network host`: Allows direct access to host network for SSH operations
    - `-v ~/.bungalo:/root/.bungalo`: Mounts your config directory
    - `-v /dev/bus/usb:/dev/bus/usb`: Mounts USB devices
+
+4. Sometimes you'll need to diagnose USB permissions from within Docker. Run with an interactive session:
+
+    ```bash
+    docker run \
+        --privileged \
+        --network host \
+        --device=/dev/bus/usb \
+        -v ~/.bungalo:/root/.bungalo \
+        -v /dev/bus/usb:/dev/bus/usb \
+        -it bungalo /bin/bash
+    ```

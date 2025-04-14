@@ -14,6 +14,7 @@ docker run -d \
      --restart=always \
      --privileged \
      --network host \
+     --device=/dev/bus/usb \
      -v ~/.bungalo:/root/.bungalo \
      -v /dev/bus/usb:/dev/bus/usb \
      ghcr.io/piercefreeman/bungalo:latest

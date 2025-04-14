@@ -18,5 +18,5 @@ class NutConfig(BaseSettings):
 
 class BungaloConfig(BaseSettings):
     root: RootConfig
-    nut: NutConfig
+    nut: NutConfig = NutConfig()
     managed_hardware: list[ManagedHardware] = []

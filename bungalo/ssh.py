@@ -92,6 +92,8 @@ class SSHManager:
     async def connect(self, hostname: str, username: str):
         """
         Using our managed SSH key, connect to a remote host using SSH.
+        Note: This connection skips host key verification for convenience.
+        Use with caution as this reduces security.
 
         :param hostname: The hostname of the remote host
         :param username: The username to connect with
@@ -101,6 +103,7 @@ class SSHManager:
             hostname,
             username=username,
             client_keys=[self.key_path],
+            known_hosts=None,  # Disable host key checking
         ) as conn:
             yield conn
 

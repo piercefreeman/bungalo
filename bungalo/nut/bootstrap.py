@@ -1,7 +1,8 @@
 import asyncio
 import os
 import subprocess
-import sys
+from dataclasses import dataclass
+from typing import Literal
 
 from bungalo.constants import NUT_SERVER_PORT
 from bungalo.logger import CONSOLE, LOGGER
@@ -36,70 +37,96 @@ class NutFailedToStart(Exception):
         )
 
 
-async def check_existing_bootstrap(ups_conf_path: str):
-    # For now we assume that if ups.conf exists we've already bootstrapped the entries
-    # We can't read the contents of the file because our non-sudo executing user won't
-    # have the permissions to do so
-    if not os.path.exists(ups_conf_path):
+NutService = Literal["nut-driver", "nut-server", "nut-monitor"]
+
+
+@dataclass
+class NutEntrypoint:
+    name: NutService
+    start_command: str
+    stop_command: str
+
+
+NUT_ENTRYPOINTS = [
+    NutEntrypoint(
+        name="nut-driver",
+        start_command="upsdrvctl -u root start",
+        stop_command="upsdrvctl stop",
+    ),
+    NutEntrypoint(name="nut-server", start_command="upsd", stop_command="upsd -c stop"),
+    NutEntrypoint(
+        name="nut-monitor", start_command="upsmon", stop_command="upsmon -c stop"
+    ),
+]
+
+
+async def start_nut_service(entrypoint: NutEntrypoint):
+    """Start a NUT process."""
+    LOGGER.info(f"Starting {entrypoint.name}...")
+    process = run_command(
+        entrypoint.start_command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if process.returncode != 0:
+        LOGGER.error(
+            f"Driver debug output:\n{process.stderr}\n{process.stdout}\nReturn code: {process.returncode}"
+        )
+
+        if entrypoint.name == "nut-driver":
+            diagnose_env_errors()
+
+        raise NutFailedToStart(f"Failed to start {entrypoint.name}")
+    else:
+        LOGGER.info(f"Started {entrypoint.name}")
+
+    await asyncio.sleep(2)  # Give process time to start
+
+
+async def stop_nut_service(entrypoint: NutEntrypoint):
+    """Stop a NUT process."""
+    try:
+        run_command(entrypoint.stop_command, check=False)
+    except Exception:
+        pass  # Ignore errors when stopping processes
+
+
+def diagnose_env_errors():
+    # Check USB devices
+    lsusb_output = run_command("lsusb", capture_output=True, text=True)
+    LOGGER.info(f"Available USB devices:\n{lsusb_output.stdout}")
+
+    # Check NUT permissions
+    ls_output = run_command("ls -la /dev/bus/usb/", capture_output=True, text=True)
+    LOGGER.info(f"USB device permissions:\n{ls_output.stdout}")
+
+    # Check if nut user exists and its groups
+    groups_output = run_command("id nut", capture_output=True, text=True)
+    LOGGER.info(f"NUT user details:\n{groups_output.stdout}")
+
+
+async def check_nut_status() -> bool:
+    """Check if NUT is responding properly."""
+    try:
+        status = run_command(
+            ["upsc", "ups@localhost"], capture_output=True, text=True, check=False
+        )
+        return status.returncode == 0
+    except Exception:
         return False
 
-    LOGGER.info("UPS device entry already exists in NUT configuration")
-    CONSOLE.print("NUT already configured with UPS device")
 
-    # Check if services are running and start them if needed
-    services = ["nut-driver", "nut-server", "nut-client"]
-    services_to_start: list[str] = []
-
-    # Check service status without sudo
-    for service in services:
-        try:
-            status = subprocess.run(
-                ["systemctl", "is-active", service],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if status.stdout.strip() != "active":
-                LOGGER.info(f"{service} is not running")
-                services_to_start.append(service)
-            else:
-                LOGGER.info(f"{service} is already running")
-        except Exception as e:
-            LOGGER.error(f"Error checking {service} status: {str(e)}")
-            services_to_start.append(service)
-
-    # Start services that aren't running
-    if services_to_start:
-        LOGGER.info("Starting inactive services...")
-        for service in services_to_start:
-            try:
-                subprocess.run(["sudo", "systemctl", "start", service], check=True)
-                await asyncio.sleep(2)  # Give service time to start
-                LOGGER.info(f"Started {service}")
-            except subprocess.CalledProcessError as e:
-                LOGGER.error(f"Failed to start {service}: {str(e)}")
-                raise NutFailedToStart(f"Failed to start {service}")
-
-    return True
-
-
-async def bootstrap_nut():
-    """
-    Bootstrap the NUT installation and configuration on Linux systems.
-    Only proceeds if the UPS device entry doesn't already exist.
-
-    """
-    if sys.platform != "linux":
-        return False, "Bootstrap is only supported on Linux systems"
-
+async def bootstrap_files():
+    """Bootstrap the necessary config files on disk for NUT. No-op if files already exist."""
     ups_conf_path = "/etc/nut/ups.conf"
-    if await check_existing_bootstrap(ups_conf_path):
-        return
 
-    # Install NUT
-    LOGGER.info("Installing NUT packages...")
-    subprocess.run(["sudo", "apt-get", "update"], check=True)
-    subprocess.run(["sudo", "apt-get", "install", "-y", "nut"], check=True)
+    if os.path.exists(ups_conf_path):
+        LOGGER.info("UPS device entry already exists in NUT configuration")
+        CONSOLE.print("NUT already configured with UPS device")
+
+        return
 
     # Basic NUT configuration
     nut_conf_path = "/etc/nut/nut.conf"
@@ -109,13 +136,11 @@ async def bootstrap_nut():
 
     # Create /etc/nut directory if it doesn't exist and set permissions
     LOGGER.info("Setting up NUT configuration directory...")
-    subprocess.run(["sudo", "mkdir", "-p", "/etc/nut"], check=True)
-    subprocess.run(
-        ["sudo", "chown", "-R", f"{os.getuid()}:nut", "/etc/nut"], check=True
-    )
-    subprocess.run(["sudo", "chmod", "750", "/etc/nut"], check=True)
+    run_command(["mkdir", "-p", "/etc/nut"], check=True)
+    run_command(["chown", "-R", f"{os.getuid()}:nut", "/etc/nut"], check=True)
+    run_command(["chmod", "750", "/etc/nut"], check=True)
 
-    # Configure NUT to run in standalone mode. Unexpectedly this is a command versus a simple key=value pair
+    # Configure NUT to run in standalone mode
     LOGGER.info("Configuring NUT...")
     with open(nut_conf_path, "w") as f:
         f.write(Section(list_values=[Command(values=["MODE=standalone"])]).render())
@@ -129,7 +154,6 @@ async def bootstrap_nut():
                     "driver": "usbhid-ups",
                     "port": "auto",
                     "desc": "Local UPS",
-                    # Add polling to ensure driver keeps checking for UPS
                     "pollinterval": 2,
                 },
             ).render()
@@ -198,79 +222,49 @@ async def bootstrap_nut():
         users_conf_path,
         upsmon_conf_path,
     ]:
-        subprocess.run(["sudo", "chown", "root:nut", conf_file], check=True)
-        subprocess.run(["sudo", "chmod", "640", conf_file], check=True)
+        run_command(["chown", "root:nut", conf_file], check=True)
+        run_command(["chmod", "640", conf_file], check=True)
 
-    # Ensure NUT can access USB devices
-    LOGGER.info("Setting up USB permissions...")
-    user_name = os.getenv("USER")
-    if not user_name:
-        raise NutFailedToStart("Failed to get user name")
-    subprocess.run(["sudo", "usermod", "-a", "-G", "nut", user_name], check=True)
-    subprocess.run(["sudo", "udevadm", "control", "--reload-rules"], check=True)
 
-    # Stop all NUT services first
-    LOGGER.info("Stopping NUT services...")
-    for service in ["nut-client", "nut-server", "nut-driver"]:
-        try:
-            subprocess.run(["sudo", "systemctl", "stop", service], check=False)
-        except Exception:
-            pass  # Ignore errors when stopping services
+async def bootstrap_nut() -> None:
+    """Bootstrap the NUT installation and configuration."""
+    await bootstrap_files()
+
+    # Stop any running services first
+    for entrypoint in NUT_ENTRYPOINTS:
+        await stop_nut_service(entrypoint)
 
     # Start services in correct order
-    # NOTE: sudo upsdrvctl -D start can be used to help debug
     LOGGER.info("Starting NUT services...")
-    try:
-        # Start driver first and wait
-        services = ["nut-driver", "nut-server", "nut-client"]
-        for service in services:
-            subprocess.run(["sudo", "systemctl", "start", service], check=True)
-            await asyncio.sleep(2)  # Give driver time to detect UPS
+    for entrypoint in NUT_ENTRYPOINTS:
+        await start_nut_service(entrypoint)
 
-        # Check driver status
-        driver_status = subprocess.run(
-            ["upsc", "ups@localhost"], capture_output=True, text=True, check=False
+    if not await check_nut_status():
+        LOGGER.error("Failed to detect UPS")
+        raise NutFailedToStart(
+            "Failed to detect UPS. Please check USB connection and permissions."
         )
 
-        if driver_status.returncode != 0:
-            LOGGER.error(f"Driver status check failed:\n{driver_status.stderr}")
-            # Get detailed service status
-            status_output = subprocess.run(
-                ["systemctl", "status", "nut-driver.service"],
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout
-            LOGGER.error(f"NUT driver status:\n{status_output}")
+    LOGGER.info("UPS detected successfully!")
 
-            raise NutFailedToStart(
-                "Failed to detect UPS. Please check USB connection and permissions."
-            )
 
-        LOGGER.info("UPS detected successfully!")
+def run_command(
+    cmd: str | list[str],
+    *,
+    check: bool = True,
+    capture_output: bool = False,
+    text: bool = False,
+) -> subprocess.CompletedProcess:
+    """
+    Run a command.
 
-    except subprocess.CalledProcessError as e:
-        # Get detailed service status if nut-server fails
-        try:
-            status_output = subprocess.run(
-                ["systemctl", "status", "nut-server.service"],
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout
-            LOGGER.error(
-                f"NUT server failed to start. Service status:\n{status_output}"
-            )
+    Args:
+        cmd: Command to run as string or list
+        check: Whether to check return code
+        capture_output: Whether to capture output
+        text: Whether to return string output
+    """
+    if isinstance(cmd, str):
+        cmd = cmd.split()
 
-            # Check common issues
-            if "no UPS definitions" in status_output:
-                raise NutNoUPSFound()
-            elif "already running" in status_output:
-                raise NutAlreadyRunning()
-            elif "Permission denied" in status_output:
-                raise NutPermissionDenied()
-            else:
-                raise NutFailedToStart(str(e))
-        except Exception as status_err:
-            LOGGER.error(f"Failed to get service status: {str(status_err)}")
-            raise NutFailedToStart(str(status_err))
+    return subprocess.run(cmd, check=check, capture_output=capture_output, text=text)

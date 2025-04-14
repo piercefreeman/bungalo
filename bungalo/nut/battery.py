@@ -71,7 +71,7 @@ class UPSMonitor:
             LOGGER.warning("No status data available to parse")
             return None
 
-        LOGGER.info(f"Raw status payload: {raw_status}")
+        LOGGER.debug(f"Raw status payload: {raw_status}")
 
         # Check ups.status variable
         summary = StatusSummary.model_validate(raw_status)
