@@ -1,3 +1,5 @@
+import asyncio
+
 from click import group
 
 from bungalo.config import BungaloConfig
@@ -9,6 +11,16 @@ from bungalo.ssh import main as ssh_main
 @group()
 def cli():
     pass
+
+
+@cli.command()
+@async_to_sync
+async def run_all():
+    """Run all bungalo workflows."""
+    config = BungaloConfig()  # type: ignore
+    await asyncio.gather(
+        battery_main(config),
+    )
 
 
 @cli.command()

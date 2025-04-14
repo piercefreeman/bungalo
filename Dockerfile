@@ -30,5 +30,5 @@ RUN mkdir -p /root/.bungalo
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Run the application
-CMD ["python", "-m", "bungalo"] 
+# Run all background processes
+CMD ["uv", "run", "bungalo", "run-all"]
