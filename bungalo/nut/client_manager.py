@@ -36,7 +36,7 @@ class ClientManager:
                 ) as conn:
                     # Use shutdown command appropriate for the client OS
                     # This assumes Linux/Unix-like systems
-                    await conn.run("sudo shutdown -h now")
+                    await conn.run("sudo shutdown -h now", timeout=10)
             except Exception as e:
                 CONSOLE.print(f"Failed to shutdown {client.hostname}: {str(e)}")
 

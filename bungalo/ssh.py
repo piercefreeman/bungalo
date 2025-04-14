@@ -89,7 +89,7 @@ class SSHManager:
             return None
 
     @asynccontextmanager
-    async def connect(self, hostname: str, username: str):
+    async def connect(self, hostname: str, username: str, timeout: float = 10):
         """
         Using our managed SSH key, connect to a remote host using SSH.
         Note: This connection skips host key verification for convenience.
@@ -97,14 +97,27 @@ class SSHManager:
 
         :param hostname: The hostname of the remote host
         :param username: The username to connect with
+        :param timeout: Connection timeout in seconds (default: 10)
+        :raises: asyncio.TimeoutError if connection times out
         :return: An AsyncSSHClient object
         """
-        async with asyncssh_connect(
-            hostname,
-            username=username,
-            client_keys=[self.key_path],
-            known_hosts=None,  # Disable host key checking
-        ) as conn:
+        try:
+            conn = await asyncio.wait_for(
+                asyncssh_connect(
+                    hostname,
+                    username=username,
+                    client_keys=[self.key_path],
+                    known_hosts=None,  # Disable host key checking
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            LOGGER.error(
+                f"SSH connection to {hostname} timed out after {timeout} seconds"
+            )
+            raise
+
+        async with conn:
             yield conn
 
 
