@@ -18,6 +18,28 @@ During bootstrapping we will write the necessary system files for NUT so the sys
 
 During steady state operation, we poll for the UPS status from our locally running NUT daemon every 10s. When the total charge dips below the `nut_shutdown_threshold` threshold, we will perform an ssh shutdown into the network devices so they have time to shutdown gracefully without data loss.
 
+### Authorized Keys
+
+The `SSHManager` manages a local bungalo ssh credential that we place into the bungalo owned folder at `~/.bungalo`.
+
+### Config
+
+To configure the server behavior, add a config file to: `~/.bungalo/config.toml`:
+
+```toml
+slack_webhook_url: https://hooks.slack.com/...
+
+[[managed_hardware]]
+  name: NAS
+  local_ip: 192.168.1.172
+  username: root
+
+[[managed_hardware]]
+  name: Dream Machine
+  local_ip: 192.168.1.1
+  username: root
+```
+
 ## Future Work
 
 - Unifi devices don't support wake-on-lan, so once they're shutdown there's no way to remotely start them back up. We'll have to combine it with a remotely controllable Power Distribution Unit if we want to add the restart behavior.
