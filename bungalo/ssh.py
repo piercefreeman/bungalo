@@ -124,11 +124,15 @@ async def main() -> None:
 
         # Display UniFi Network instructions
         CONSOLE.print("\n[yellow]To add this key to UniFi Network:[/yellow]")
-        CONSOLE.print("1. Log in to your UniFi Network application")
+        CONSOLE.print("1. Assign your device a known ssh password")
         CONSOLE.print(
-            "2. Navigate to Settings > System > Advanced > Device Authentication > SSH Keys"
+            "2.a Navigate to Settings > Control Panel > Console > SSH Keys to set the root ssh password"
         )
-        CONSOLE.print("3. Click 'Add SSH Key' and paste the above public key")
+        CONSOLE.print(
+            "2.b Navigate to Settings > Control Panel > Controls > About This Console to get the local IP"
+        )
+        CONSOLE.print("3. Copy over the public key to the ~/.ssh/authorized_keys file")
+        CONSOLE.print("3a. ssh-copy-id -i ~/.bungalo/id_rsa.pub root@<local-ip>")
     else:
         CONSOLE.print("[red]Failed to read SSH public key[/red]")
 

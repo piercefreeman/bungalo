@@ -12,6 +12,7 @@ dependencies = [
     "asyncssh>=2.14.2",
     "wakeonlan>=3.1.0",
     "pydantic-settings>=2.8.1",
+    "httpx>=0.28.1",
 ]
 
 [build-system]
@@ -26,7 +27,7 @@ dev = [
 ]
 
 [project.scripts]
-bungalo = "bungalo.main:cli"
+bungalo = "bungalo.cli:cli"
 
 [tool.ruff.lint]
 # Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.

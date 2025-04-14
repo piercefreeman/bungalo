@@ -2,7 +2,7 @@ from click import group
 
 from bungalo.config import BungaloConfig
 from bungalo.io import async_to_sync
-from bungalo.nut.battery import main as battery_main
+from bungalo.nut.cli import main as battery_main
 from bungalo.ssh import main as ssh_main
 
 

@@ -61,3 +61,30 @@ class ClientManager:
                 send_magic_packet(client.mac_address)
             except Exception as e:
                 CONSOLE.print(f"Failed to wake {client.hostname}: {str(e)}")
+
+    async def healthcheck(self) -> dict[str, bool]:
+        """
+        Perform a health check by attempting to connect to each registered client.
+
+        :return: Dictionary mapping 'hostname:username' to connection success status
+        """
+        results: dict[str, bool] = {}
+        ssh_manager = SSHManager()
+
+        for client in self.clients:
+            key = f"{client.hostname}:{client.username}"
+            try:
+                async with ssh_manager.connect(
+                    client.hostname, client.username
+                ) as conn:
+                    # Try to execute a simple command to verify connection
+                    await conn.run('echo "Connection test"')
+                    results[key] = True
+                    CONSOLE.print(
+                        f"[green]SSH health check succeeded for {key}[/green]"
+                    )
+            except Exception as e:
+                results[key] = False
+                CONSOLE.print(f"[red]SSH health check failed for {key}: {str(e)}[/red]")
+
+        return results
