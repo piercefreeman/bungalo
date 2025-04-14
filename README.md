@@ -4,9 +4,35 @@ Control library for our home network.
 
 ## Getting Started
 
+### Hardware Setup
 - The main `Bungalo` server should be connected directly to the UPS over USB. It should be accessibile via `lsusb`.
 - The server should be in the same LAN as the network devices that we want to restart via ssh.
 - The BIOS for the server should be updated to enable "always restart on power failure" so systemctl can bootup and re-launch our Docker worker.
+
+### Docker Setup
+1. Build the Docker image:
+   ```bash
+   docker build -t bungalo .
+   ```
+
+2. Create your config file at `~/.bungalo/config.toml` (see Config section below)
+
+3. Run the container in privileged mode to access USB devices:
+   ```bash
+   docker run -d \
+     --name bungalo \
+     --privileged \
+     --network host \
+     -v ~/.bungalo:/root/.bungalo \
+     -v /dev/bus/usb:/dev/bus/usb \
+     bungalo
+   ```
+
+   The flags explained:
+   - `--privileged`: Required for USB device access
+   - `--network host`: Allows direct access to host network for SSH operations
+   - `-v ~/.bungalo:/root/.bungalo`: Mounts your config directory
+   - `-v /dev/bus/usb:/dev/bus/usb`: Mounts USB devices
 
 ## Features
 
