@@ -1,9 +1,8 @@
-import os
 import subprocess
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Generator, Optional, TypeVar, Union
+from typing import Any, Generator, TypeVar
 
 from bungalo.logger import CONSOLE
 
@@ -17,9 +16,9 @@ def mount_smb(
     share: str = "",  # Empty string for root share
     username: str = "",
     password: str = "",
-    domain: Optional[str] = None,
-    mount_options: Optional[Dict[str, Any]] = None,
-    mount_point: Optional[Union[str, Path]] = None,
+    domain: str | None = None,
+    mount_options: dict[str, Any] | None = None,
+    mount_point: str | Path | None = None,
 ) -> Generator[Path, None, None]:
     """
     Context manager that temporarily mounts an SMB share and yields the mount path.
@@ -45,17 +44,18 @@ def mount_smb(
         If you only have an SMB URL like "smb://192.168.1.172", the server is "192.168.1.172"
         and you'll need to know which share to connect to on that server.
     """
-    is_temp_dir = mount_point is None
+    # Fallback to a temporary directory if no mount point is provided
+    temp_dir: tempfile.TemporaryDirectory | None = None
+    mount_dir: Path
+    if mount_point is None:
+        temp_dir = tempfile.TemporaryDirectory()
+        mount_dir = Path(temp_dir.name)
+    else:
+        mount_dir = Path(mount_point)
+
+    mount_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        if is_temp_dir:
-            # Create a temporary directory for mounting
-            temp_dir = tempfile.TemporaryDirectory()
-            mount_point = temp_dir.name
-
-        mount_path = Path(mount_point)
-        os.makedirs(mount_path, exist_ok=True)
-
         # Prepare mount options for Linux
         options_str = "vers=3.0"  # Default to SMB3 protocol
 
@@ -80,23 +80,23 @@ def mount_smb(
             "-t",
             "cifs",
             f"//{server}/{share}",
-            str(mount_path),
+            str(mount_dir),
             "-o",
             options_str,
         ]
         subprocess.run(cmd, check=True, capture_output=True)
 
         # Yield the mount point
-        yield mount_path
+        yield mount_dir
 
     finally:
         # Unmount and clean up
         try:
-            if os.path.ismount(str(mount_path)):
-                subprocess.run(["umount", str(mount_path)], check=True)
+            if mount_dir.is_mount():
+                subprocess.run(["umount", str(mount_dir)], check=True)
         except Exception as e:
-            CONSOLE.print(f"Warning: Failed to unmount {mount_path}: {e}")
+            CONSOLE.print(f"Warning: Failed to unmount {mount_dir}: {e}")
 
         # Clean up the temporary directory if we created one
-        if is_temp_dir:
+        if temp_dir:
             temp_dir.cleanup()

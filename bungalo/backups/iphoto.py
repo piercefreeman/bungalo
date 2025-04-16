@@ -5,11 +5,19 @@ from pathlib import Path
 from queue import Queue
 from shutil import copyfile
 from tempfile import TemporaryDirectory
-from typing import Any, Iterator
+from typing import Iterator
 
+from foundation.core import constant, identity
 from icloudpd import download, exif_datetime
 from icloudpd.authentication import TwoStepAuthRequiredError, authenticator
+from icloudpd.mfa_provider import MFAProvider
 from icloudpd.paths import clean_filename
+from icloudpd.status import StatusExchange
+from pyicloud_ipd.base import PyiCloudService
+from pyicloud_ipd.file_match import FileMatchPolicy
+from pyicloud_ipd.raw_policy import RawTreatmentPolicy
+from pyicloud_ipd.services.photos import PhotoAlbum, PhotoAsset
+from pyicloud_ipd.version_size import AssetVersionSize
 from tzlocal import get_localzone
 
 from bungalo.backups.nas import mount_smb
@@ -22,7 +30,7 @@ FOLDER_STRUCTURE = "{:%Y/%m/%d}"
 
 @dataclass
 class PhotoContext:
-    photo: Any
+    photo: PhotoAsset
     created_date: datetime
     output_path: Path
 
@@ -41,7 +49,7 @@ class iPhotoSync:
         password: str,
         client_id: str,
         album_name: str,
-        photo_size: str,
+        photo_size: AssetVersionSize,
         output_path: Path,
         concurrency: int = 10,
     ) -> None:
@@ -75,7 +83,7 @@ class iPhotoSync:
         Uses asyncio for non-blocking concurrent downloads with a queue system
         to control resource usage.
         """
-        icloud = await self.icloud_login_async()
+        icloud = self.icloud_login()
         CONSOLE.print("Getting photo metadata from album...")
         photos = icloud.photos.albums[self.album_name]
         CONSOLE.print(f"Found {len(photos)} photos, starting to process metadata...")
@@ -98,7 +106,9 @@ class iPhotoSync:
 
         CONSOLE.print("Photo sync completed successfully")
 
-    async def _populate_queue(self, photos: Any, queue: Queue[PhotoContext]) -> None:
+    async def _populate_queue(
+        self, photos: PhotoAlbum, queue: Queue[PhotoContext]
+    ) -> None:
         """
         Populate the work queue with photo contexts.
 
@@ -116,7 +126,7 @@ class iPhotoSync:
         await asyncio.to_thread(_inner)
 
     async def _worker(
-        self, icloud: Any, worker_id: int, queue: Queue[PhotoContext]
+        self, icloud: PyiCloudService, worker_id: int, queue: Queue[PhotoContext]
     ) -> None:
         """
         Worker task that processes photos from the queue.
@@ -155,7 +165,7 @@ class iPhotoSync:
         """
         processed = 0
 
-        async with progress_bar(total=total_photos, description="Syncing photos") as (
+        with progress_bar(total=total_photos, description="Syncing photos") as (
             pb,
             task,
         ):
@@ -168,7 +178,7 @@ class iPhotoSync:
             # Wait a bit before checking again
             await asyncio.sleep(0.5)
 
-    def iter_photos(self, photos: Any) -> Iterator[PhotoContext]:
+    def iter_photos(self, photos: PhotoAlbum) -> Iterator[PhotoContext]:
         """
         Generate PhotoContext objects for each relevant photo.
 
@@ -204,7 +214,7 @@ class iPhotoSync:
                 output_path=self.output_path / date_path / filename,
             )
 
-    def sync_photo(self, icloud: Any, photo_payload: PhotoContext) -> None:
+    def sync_photo(self, icloud: PyiCloudService, photo_payload: PhotoContext) -> None:
         """
         Download and save a single photo to its destination.
 
@@ -223,14 +233,17 @@ class iPhotoSync:
 
         with TemporaryDirectory() as download_root:
             download_path = Path(download_root) / "content"
+            version = photo_payload.photo.versions[self.photo_size]
 
             start_time = datetime.now()
-            # Download media directly without async wrapping
             download_result = download.download_media(
-                icloud,
-                photo_payload.photo,
-                download_path,
-                self.photo_size,
+                logger=LOGGER,
+                dry_run=False,
+                icloud=icloud,
+                photo=photo_payload.photo,
+                download_path=str(download_path),
+                version=version,
+                size=AssetVersionSize.ORIGINAL,
             )
             LOGGER.debug("Download Duration (ms)", datetime.now() - start_time)
 
@@ -247,7 +260,7 @@ class iPhotoSync:
 
     def inject_exif(
         self,
-        photo: Any,
+        photo: PhotoAsset,
         download_result: bool,
         download_path: Path,
         created_date: datetime,
@@ -271,15 +284,16 @@ class iPhotoSync:
         if (
             set_exif_datetime
             and (clean_filename(photo.filename).lower().endswith((".jpg", ".jpeg")))
-            and not exif_datetime.get_photo_exif(download_path)
+            and not exif_datetime.get_photo_exif(logger=LOGGER, path=str(download_path))
         ):
             exif_datetime.set_photo_exif(
-                download_path,
-                created_date.strftime("%Y:%m:%d %H:%M:%S"),
+                logger=LOGGER,
+                path=str(download_path),
+                date=created_date.strftime("%Y:%m:%d %H:%M:%S"),
             )
-        download.set_utime(download_path, created_date)
+        download.set_utime(str(download_path), created_date)
 
-    def icloud_login(self, cookie_directory: str = "~/.pyicloud") -> Any:
+    def icloud_login(self, cookie_directory: str = "~/.pyicloud") -> PyiCloudService:
         """
         Authenticate with iCloud services.
 
@@ -288,26 +302,31 @@ class iPhotoSync:
         :raises Exception: If two-factor authentication is required
         """
         try:
-            return authenticator("com")(
+            password_providers = {
+                "parameter": (constant(self.password), lambda _r, _w: None)
+            }
+            status_exchange = StatusExchange()
+
+            return authenticator(
+                logger=LOGGER,
+                domain="com",
+                filename_cleaner=clean_filename,
+                lp_filename_generator=identity,
+                # Default values are provided by the default CLI entrypoint params
+                # https://github.com/icloud-photos-downloader/icloud_photos_downloader/blob/c4a63229c4d490ee86491c660ecd7ababb415b33/src/icloudpd/base.py#L286
+                raw_policy=RawTreatmentPolicy.AS_IS,
+                file_match_policy=FileMatchPolicy.NAME_SIZE_DEDUP_WITH_SUFFIX,
+                password_providers=password_providers,  # type: ignore
+                mfa_provider=MFAProvider.CONSOLE,
+                status_exchange=status_exchange,
+            )(
                 self.username,
-                self.password,
                 cookie_directory,
-                raise_error_on_2sa=False,
-                client_id=self.client_id,
+                False,
+                self.client_id,
             )
         except TwoStepAuthRequiredError:
             raise Exception("Two-step authentication required")
-
-    async def icloud_login_async(self, cookie_directory: str = "~/.pyicloud") -> Any:
-        """
-        Authenticate with iCloud services asynchronously.
-
-        :param cookie_directory: Directory to store authentication cookies
-        :return: Authenticated iCloud service instance
-        :raises Exception: If two-factor authentication is required
-        """
-        # Run authentication in a thread to avoid blocking
-        return await asyncio.to_thread(self.icloud_login, cookie_directory)
 
 
 async def main(config: BungaloConfig) -> None:
@@ -332,7 +351,7 @@ async def main(config: BungaloConfig) -> None:
             password=config.iphoto.password,
             client_id=config.iphoto.client_id,
             album_name=config.iphoto.album_name,
-            photo_size=config.iphoto.photo_size,
+            photo_size=AssetVersionSize(config.iphoto.photo_size),
             output_path=Path(mount_dir) / config.iphoto.output_directory,
         )
 

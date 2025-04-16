@@ -44,3 +44,6 @@ section-order = [
     "local-folder",
 ]
 combine-as-imports = true
+
+[tool.uv.sources]
+icloudpd = { git = "https://github.com/piercefreeman/icloud_photos_downloader" }

@@ -1,4 +1,5 @@
-from pydantic_settings import BaseSettings, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 
 class ManagedHardware(BaseSettings):
@@ -30,11 +31,12 @@ class iPhotoBackupConfig(BaseSettings):
     client_id: str
     album_name: str = "All Photos"
     photo_size: str = "original"
+    output_directory: str
 
 
 class BungaloConfig(BaseSettings):
-    root: RootConfig = Field(default_factory=RootConfig)
+    root: RootConfig
     nut: NutConfig = Field(default_factory=NutConfig)
-    nas: NASConfig = Field(default_factory=NASConfig)
-    iphoto: iPhotoBackupConfig = Field(default_factory=iPhotoBackupConfig)
+    nas: NASConfig
+    iphoto: iPhotoBackupConfig
     managed_hardware: list[ManagedHardware] = []
