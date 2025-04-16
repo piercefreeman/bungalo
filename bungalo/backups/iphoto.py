@@ -25,6 +25,7 @@ from bungalo.backups.nas import mount_smb
 from bungalo.config import BungaloConfig
 from bungalo.io import progress_bar
 from bungalo.logger import CONSOLE, LOGGER
+from bungalo.slack import SlackClient
 
 FOLDER_STRUCTURE = "{:%Y/%m/%d}"
 
@@ -352,26 +353,31 @@ async def main(config: BungaloConfig) -> None:
 
     Mounts NAS drive using SMB and performs photo synchronization.
     """
+    slack_client = SlackClient(config.root.slack_webhook_url)
+
     while True:
-        with mount_smb(
-            server=config.nas.ip_address,
-            share=config.nas.drive_name,
-            username=config.nas.username,
-            password=config.nas.password,
-            domain=config.nas.domain,
-        ) as mount_dir:
-            CONSOLE.print(f"SMB share mounted at: {mount_dir}")
+        try:
+            with mount_smb(
+                server=config.nas.ip_address,
+                share=config.nas.drive_name,
+                username=config.nas.username,
+                password=config.nas.password,
+                domain=config.nas.domain,
+            ) as mount_dir:
+                CONSOLE.print(f"SMB share mounted at: {mount_dir}")
 
-            iphoto_sync = iPhotoSync(
-                username=config.iphoto.username,
-                password=config.iphoto.password,
-                client_id=config.iphoto.client_id,
-                album_name=config.iphoto.album_name,
-                photo_size=AssetVersionSize(config.iphoto.photo_size),
-                output_path=Path(mount_dir) / config.iphoto.output_directory,
-            )
+                iphoto_sync = iPhotoSync(
+                    username=config.iphoto.username,
+                    password=config.iphoto.password,
+                    client_id=config.iphoto.client_id,
+                    album_name=config.iphoto.album_name,
+                    photo_size=AssetVersionSize(config.iphoto.photo_size),
+                    output_path=Path(mount_dir) / config.iphoto.output_directory,
+                )
 
-            await iphoto_sync.sync()
+                await iphoto_sync.sync()
+        except Exception as e:
+            await slack_client.send_message(f"Error syncing iPhoto: {e}")
 
     # Run every 24 hours
     await asyncio.sleep(24 * 60 * 60)
