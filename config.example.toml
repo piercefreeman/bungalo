@@ -20,5 +20,4 @@ slack_webhook_url = "https://hooks.slack.com/..."
 [iphoto]
   username = "your_username"
   password = "your_password"
-  client_id = "your_client_id"
   output_directory = "iphoto"

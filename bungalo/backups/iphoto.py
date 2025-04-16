@@ -325,6 +325,14 @@ class iPhotoSync:
                 False,
                 self.client_id,
             )
+        except PyiCloudFailedLoginException as e:
+            if "503" in str(e):
+                CONSOLE.print(f"503 detected, this might be a transient error because of rate limiting.")
+                CONSOLE.print("https://github.com/icloud-photos-downloader/icloud_photos_downloader/issues/970")
+                CONSOLE.print("https://github.com/icloud-photos-downloader/icloud_photos_downloader/issues/1078")
+                raise Exception("503 detected")
+            else:
+                raise e
         except TwoStepAuthRequiredError:
             raise Exception("Two-step authentication required")
 
