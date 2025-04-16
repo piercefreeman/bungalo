@@ -47,7 +47,7 @@ class iPhotoSync:
         self,
         username: str,
         password: str,
-        client_id: str,
+        client_id: str | None,
         album_name: str,
         photo_size: AssetVersionSize,
         output_path: Path,
