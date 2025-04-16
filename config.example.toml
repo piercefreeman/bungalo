@@ -10,3 +10,14 @@ slack_webhook_url = "https://hooks.slack.com/..."
   name = "Dream Machine"
   local_ip = "192.168.1.1"
   username = "root"
+
+[nas]
+  ip_address = "192.168.1.172"
+  drive_name = "NAS"
+  username = "root"
+  password = "password"
+
+[iphoto]
+  username = "your_username"
+  password = "your_password"
+  output_directory = "iphoto"

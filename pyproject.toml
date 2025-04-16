@@ -13,6 +13,7 @@ dependencies = [
     "wakeonlan>=3.1.0",
     "pydantic-settings>=2.8.1",
     "httpx>=0.28.1",
+    "icloudpd>=1.27.4",
 ]
 
 [build-system]
@@ -43,3 +44,6 @@ section-order = [
     "local-folder",
 ]
 combine-as-imports = true
+
+[tool.uv.sources]
+icloudpd = { git = "https://github.com/piercefreeman/icloud_photos_downloader" }

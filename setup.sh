@@ -5,6 +5,9 @@
 # Pull the latest container
 docker pull ghcr.io/piercefreeman/bungalo:latest
 
+# We require cifs to be loaded for the NAS backup to work
+sudo modprobe cifs
+
 # Shutdown the current container if it exists
 docker rm -f bungalo || true
 
@@ -15,6 +18,8 @@ docker run -d \
      --privileged \
      --network host \
      --device=/dev/bus/usb \
+     --cap-add=SYS_ADMIN \
+     --device /dev/fuse \
      -v ~/.bungalo:/root/.bungalo \
      -v /dev/bus/usb:/dev/bus/usb \
      ghcr.io/piercefreeman/bungalo:latest
