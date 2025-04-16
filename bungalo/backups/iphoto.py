@@ -14,6 +14,7 @@ from icloudpd.mfa_provider import MFAProvider
 from icloudpd.paths import clean_filename
 from icloudpd.status import StatusExchange
 from pyicloud_ipd.base import PyiCloudService
+from pyicloud_ipd.exceptions import PyiCloudFailedLoginException
 from pyicloud_ipd.file_match import FileMatchPolicy
 from pyicloud_ipd.raw_policy import RawTreatmentPolicy
 from pyicloud_ipd.services.photos import PhotoAlbum, PhotoAsset
@@ -327,9 +328,15 @@ class iPhotoSync:
             )
         except PyiCloudFailedLoginException as e:
             if "503" in str(e):
-                CONSOLE.print(f"503 detected, this might be a transient error because of rate limiting.")
-                CONSOLE.print("https://github.com/icloud-photos-downloader/icloud_photos_downloader/issues/970")
-                CONSOLE.print("https://github.com/icloud-photos-downloader/icloud_photos_downloader/issues/1078")
+                CONSOLE.print(
+                    "503 detected, this might be a transient error because of rate limiting."
+                )
+                CONSOLE.print(
+                    "https://github.com/icloud-photos-downloader/icloud_photos_downloader/issues/970"
+                )
+                CONSOLE.print(
+                    "https://github.com/icloud-photos-downloader/icloud_photos_downloader/issues/1078"
+                )
                 raise Exception("503 detected")
             else:
                 raise e
@@ -345,22 +352,26 @@ async def main(config: BungaloConfig) -> None:
 
     Mounts NAS drive using SMB and performs photo synchronization.
     """
-    with mount_smb(
-        server=config.nas.ip_address,
-        share=config.nas.drive_name,
-        username=config.nas.username,
-        password=config.nas.password,
-        domain=config.nas.domain,
-    ) as mount_dir:
-        CONSOLE.print(f"SMB share mounted at: {mount_dir}")
+    while True:
+        with mount_smb(
+            server=config.nas.ip_address,
+            share=config.nas.drive_name,
+            username=config.nas.username,
+            password=config.nas.password,
+            domain=config.nas.domain,
+        ) as mount_dir:
+            CONSOLE.print(f"SMB share mounted at: {mount_dir}")
 
-        iphoto_sync = iPhotoSync(
-            username=config.iphoto.username,
-            password=config.iphoto.password,
-            client_id=config.iphoto.client_id,
-            album_name=config.iphoto.album_name,
-            photo_size=AssetVersionSize(config.iphoto.photo_size),
-            output_path=Path(mount_dir) / config.iphoto.output_directory,
-        )
+            iphoto_sync = iPhotoSync(
+                username=config.iphoto.username,
+                password=config.iphoto.password,
+                client_id=config.iphoto.client_id,
+                album_name=config.iphoto.album_name,
+                photo_size=AssetVersionSize(config.iphoto.photo_size),
+                output_path=Path(mount_dir) / config.iphoto.output_directory,
+            )
 
-        await iphoto_sync.sync()
+            await iphoto_sync.sync()
+
+    # Run every 24 hours
+    await asyncio.sleep(24 * 60 * 60)

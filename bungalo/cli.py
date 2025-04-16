@@ -24,6 +24,7 @@ async def run_all():
     config = get_config()
     await asyncio.gather(
         battery_main(config),
+        iphoto_main(config),
     )
 
 
