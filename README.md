@@ -61,6 +61,8 @@ To configure the server behavior, add a config file to: `~/.bungalo/config.toml`
      --device=/dev/bus/usb \
      -v ~/.bungalo:/root/.bungalo \
      -v /dev/bus/usb:/dev/bus/usb \
+     --cap-add=SYS_ADMIN \
+     --device /dev/fuse \
      bungalo
    ```
 
@@ -79,5 +81,7 @@ To configure the server behavior, add a config file to: `~/.bungalo/config.toml`
         --device=/dev/bus/usb \
         -v ~/.bungalo:/root/.bungalo \
         -v /dev/bus/usb:/dev/bus/usb \
+        --cap-add=SYS_ADMIN \
+        --device /dev/fuse \
         -it bungalo /bin/bash
     ```
