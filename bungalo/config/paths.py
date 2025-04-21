@@ -67,7 +67,7 @@ class R2Path(PathBase):
     @staticmethod
     def _from_uri(v: str) -> dict[str, str]:
         scheme, endpoint_nickname, bucket, key = R2Path.parse_endpoint_uri(v)
-        if scheme != "r2":
+        if scheme != "r2" or not key.strip():
             raise ValueError("r2 URI must be r2://<endpoint_nickname>/<bucket>/<key>")
         return {"endpoint_nickname": endpoint_nickname, "bucket": bucket, "key": key}
 
@@ -82,7 +82,7 @@ class NASPath(PathBase):
     @staticmethod
     def _from_uri(v: str) -> dict[str, str]:
         scheme, endpoint_nickname, drive, path = NASPath.parse_endpoint_uri(v)
-        if scheme != "nas":
+        if scheme != "nas" or not path.strip():
             raise ValueError("nas URI must be nas://<endpoint_nickname>/<drive>/<path>")
         return {
             "endpoint_nickname": endpoint_nickname,

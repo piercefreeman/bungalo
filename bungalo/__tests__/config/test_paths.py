@@ -108,8 +108,8 @@ class JobSpec(BaseModel):
 
 def test_job_spec_basic_roundtrip() -> None:
     data = {
-        "source": "r2://data‑bucket/input.csv",
-        "dest": "nas://reports/output.csv",
+        "source": "r2://account/data‑bucket/input.csv",
+        "dest": "nas://account/reports/output.csv",
     }
     spec = JobSpec.model_validate(data)
     assert spec.source.bucket == "data‑bucket"

@@ -36,17 +36,17 @@ def config_dict() -> dict[str, Any]:
             "client_id": "test_client_id",
             "album_name": "Test Album",
             "photo_size": "large",
-            "output_directory": "r2://test-bucket/photos",
+            "output_directory": "r2://backup/test-bucket/photos",
         },
         "remote": {
             "sync": [
                 {
-                    "src": "nas://nas1/documents",
-                    "dst": "r2://backup-bucket/documents",
+                    "src": "nas://nas1/drive1/documents",
+                    "dst": "r2://backup/backup-bucket/documents",
                 },
                 {
-                    "src": "nas://nas2/media",
-                    "dst": "r2://backup-bucket/media",
+                    "src": "nas://nas2/drive2/media",
+                    "dst": "r2://backup/backup-bucket/media",
                 },
             ]
         },
@@ -102,7 +102,7 @@ def test_fully_parameterized_config(config_dict: dict[str, Any]) -> None:
     assert config.iphoto.photo_size == "large"
     assert isinstance(config.iphoto.output_directory, R2Path)
     assert config.iphoto.output_directory.bucket == "test-bucket"
-    assert config.iphoto.output_directory.path == "photos"
+    assert config.iphoto.output_directory.key == "photos"
 
     assert isinstance(config.remote, RemoteBackupConfig)
     assert len(config.remote.sync) == 2

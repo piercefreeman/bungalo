@@ -40,6 +40,20 @@ To configure the server behavior, add a config file to: `~/.bungalo/config.toml`
 
 - Unifi devices don't support wake-on-lan, so once they're shutdown there's no way to remotely start them back up. We'll have to combine it with a remotely controllable Power Distribution Unit if we want to add the restart behavior.
 
+## Running tests
+
+All tests are run with pytest and can either be run explicitly or routed through our Makefile:
+
+```bash
+make test
+```
+
+To filter for a specific tests.
+
+```bash
+make test -- -k test_fully_parameterized_config
+```
+
 ## Development
 
 1. Build the Docker image:

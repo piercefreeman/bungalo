@@ -10,7 +10,7 @@ lint: format check
 
 test:
 	@echo "Running tests for $(FILES)..."
-	@(cd $(DIR) && uv run pytest -vvv $(FILES))
+	@(cd $(DIR) && uv run pytest -vvv $(FILES) $(filter-out $@,$(MAKECMDGOALS)))
 
 format:
 	@echo "Running linting for $(FILES)..."
@@ -33,4 +33,7 @@ help:
 	@echo "  make lint [DIR=dir] [FILES=files] [CHECK_ONLY=true|false] - Run all linting checks"
 	@echo "  make format [DIR=dir] [FILES=files] [CHECK_ONLY=true|false] - Run ruff format and fix"
 	@echo "  make check [DIR=dir] [FILES=files]  - Run pyright checks"
-	@echo "  make help                          - Show this help message" 
+	@echo "  make help                          - Show this help message"
+
+%:
+	@: 
