@@ -4,7 +4,7 @@ import typing as t
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from bungalo.paths import FileLocation, NASPath, R2Path
+from bungalo.config.paths import FileLocation, NASPath, R2Path
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilities
@@ -23,24 +23,29 @@ def validate_file_location(v: str) -> R2Path | NASPath:
 # ─────────────────────────────────────────────────────────────────────────────
 
 R2_CASES: list[tuple[str, str, str]] = [
-    ("r2://bucket/one.txt", "bucket", "one.txt"),
-    ("r2://my‑bucket/nested/path/data.csv", "my‑bucket", "nested/path/data.csv"),
+    ("r2://r2-account-1/bucket/one.txt", "r2-account-1", "bucket", "one.txt"),
+    (
+        "r2://r2-account-1/my‑bucket/nested/path/data.csv",
+        "r2-account-1",
+        "my‑bucket",
+        "nested/path/data.csv",
+    ),
 ]
 
 NAS_CASES: list[tuple[str, str, str]] = [
-    ("nas://drive/doc.pdf", "drive", "doc.pdf"),
+    ("nas://nas-account-1/drive/doc.pdf", "nas-account-1", "drive", "doc.pdf"),
     (
-        "nas://shared‑drive/reports/2025/report.parquet",
+        "nas://nas-account-1/shared‑drive/reports/2025/report.parquet",
+        "nas-account-1",
         "shared‑drive",
         "reports/2025/report.parquet",
     ),
 ]
 
 INVALID_URIS: list[str] = [
-    "s3://bucket/key",  # unsupported scheme
-    "r2://missing‑key/",  # empty key
-    "r2:///no‑bucket.txt",  # empty bucket
-    "nas:///no‑drive/path",  # empty drive
+    "s3://account/bucket/key",  # unsupported scheme
+    "r2://account/missing‑key/",  # empty key
+    "r2://account/no‑bucket.txt",  # empty bucket
     "/absolute/filesystem/path.txt",  # no scheme at all
 ]
 
@@ -48,10 +53,10 @@ INVALID_URIS: list[str] = [
 # ─────────────────────────────────────────────────────────────────────────────
 # R2Path  ↔︎  string
 # ─────────────────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("uri,bucket,key", R2_CASES, ids=lambda c: c[0])
-def test_r2path_parse_roundtrip(uri: str, bucket: str, key: str) -> None:
+@pytest.mark.parametrize("uri,nickname,bucket,key", R2_CASES, ids=lambda c: c[0])
+def test_r2path_parse_roundtrip(uri: str, nickname: str, bucket: str, key: str) -> None:
     r2 = R2Path.model_validate(uri)
-    assert (r2.bucket, r2.key) == (bucket, key)
+    assert (r2.endpoint_nickname, r2.bucket, r2.key) == (nickname, bucket, key)
     assert json.loads(r2.model_dump_json()) == uri
     assert str(r2) == uri
 
@@ -59,10 +64,12 @@ def test_r2path_parse_roundtrip(uri: str, bucket: str, key: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # NASPath  ↔︎  string
 # ─────────────────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("uri,drive,path", NAS_CASES, ids=lambda c: c[0])
-def test_naspath_parse_roundtrip(uri: str, drive: str, path: str) -> None:
+@pytest.mark.parametrize("uri,nickname,drive,path", NAS_CASES, ids=lambda c: c[0])
+def test_naspath_parse_roundtrip(
+    uri: str, nickname: str, drive: str, path: str
+) -> None:
     nas = NASPath.model_validate(uri)
-    assert (nas.drive_name, nas.path) == (drive, path)
+    assert (nas.endpoint_nickname, nas.drive_name, nas.path) == (nickname, drive, path)
     assert json.loads(nas.model_dump_json()) == uri
     assert str(nas) == uri
 

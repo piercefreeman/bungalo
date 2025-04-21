@@ -1,13 +1,8 @@
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
-from bungalo.paths import FileLocation
-
-
-class ManagedHardware(BaseSettings):
-    name: str
-    local_ip: str
-    username: str
+from bungalo.config.endpoints import NASEndpoint, R2Endpoint
+from bungalo.config.paths import FileLocation
 
 
 class RootConfig(BaseSettings):
@@ -19,15 +14,6 @@ class NutConfig(BaseSettings):
     startup_threshold: int = 50  # Start back up when battery above 50%
 
 
-class NASConfig(BaseSettings):
-    nickname: str
-    ip_address: str
-    username: str
-    password: str
-    # drive_name: str
-    domain: str = "WORKGROUP"
-
-
 class iPhotoBackupConfig(BaseSettings):
     username: str
     password: str
@@ -37,28 +23,33 @@ class iPhotoBackupConfig(BaseSettings):
     output_directory: FileLocation
 
 
-class R2Account(BaseSettings):
-    nickname: str
-    api_key: str
-
-
 class RemoteSync(BaseSettings):
     src: FileLocation
     dst: FileLocation
 
 
 class RemoteBackupConfig(BaseSettings):
-    accounts: list[R2Account]
     sync: list[RemoteSync]
 
 
+class EndpointConfig(BaseSettings):
+    r2: list[R2Endpoint] = []
+    nas: list[NASEndpoint] = []
+
+
 class BungaloConfig(BaseSettings):
+    # General ungrouped configuration
     root: RootConfig
+
+    # Power management
     nut: NutConfig = Field(default_factory=NutConfig)
-    nas: NASConfig
+
+    # Backups
     iphoto: iPhotoBackupConfig
     remote: RemoteBackupConfig
-    managed_hardware: list[ManagedHardware] = []
+
+    # Storage locations
+    endpoints: EndpointConfig = Field(default_factory=EndpointConfig)
 
     # Validate that all of the remote files that were validated to NAS files or
     # R2 accounts match the nicknames that we have specified
