@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     openssh-client \
     usbutils \
     git \
+    rclone \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up NUT user and permissions

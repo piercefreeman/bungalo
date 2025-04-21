@@ -8,6 +8,10 @@ CHECK_ONLY ?= false
 
 lint: format check
 
+test:
+	@echo "Running tests for $(FILES)..."
+	@(cd $(DIR) && uv run pytest -vvv $(FILES))
+
 format:
 	@echo "Running linting for $(FILES)..."
 ifeq ($(CHECK_ONLY),true)
