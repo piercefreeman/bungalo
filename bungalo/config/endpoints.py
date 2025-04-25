@@ -20,6 +20,11 @@ class EndpointBase(BaseSettings, ABC):
 
     """
 
+    encrypt_key: str | None = None
+    """
+    The key to use for encrypting the data at rest.
+    """
+
     @abstractmethod
     def validate_path(self, path: FileLocation) -> bool: ...
 

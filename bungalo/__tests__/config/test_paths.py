@@ -4,7 +4,7 @@ import typing as t
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from bungalo.config.paths import FileLocation, NASPath, R2Path
+from bungalo.config.paths import B2Path, FileLocation, NASPath
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilities
@@ -14,7 +14,7 @@ from bungalo.config.paths import FileLocation, NASPath, R2Path
 FileLocationAdapter = TypeAdapter(FileLocation)
 
 
-def validate_file_location(v: str) -> R2Path | NASPath:
+def validate_file_location(v: str) -> B2Path | NASPath:
     return FileLocationAdapter.validate_python(v)
 
 
@@ -22,20 +22,20 @@ def validate_file_location(v: str) -> R2Path | NASPath:
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
 
-R2_CASES: list[tuple[str, str, str]] = [
-    ("r2://r2-account-1/bucket/one.txt", "r2-account-1", "bucket", "one.txt"),
+B2_CASES: list[tuple[str, str, str, str]] = [
+    ("b2:r2-account-1://bucket/one.txt", "r2-account-1", "bucket", "one.txt"),
     (
-        "r2://r2-account-1/my‑bucket/nested/path/data.csv",
+        "b2:r2-account-1://my‑bucket/nested/path/data.csv",
         "r2-account-1",
         "my‑bucket",
         "nested/path/data.csv",
     ),
 ]
 
-NAS_CASES: list[tuple[str, str, str]] = [
-    ("nas://nas-account-1/drive/doc.pdf", "nas-account-1", "drive", "doc.pdf"),
+NAS_CASES: list[tuple[str, str, str, str]] = [
+    ("nas:nas-account-1://drive/doc.pdf", "nas-account-1", "drive", "doc.pdf"),
     (
-        "nas://nas-account-1/shared‑drive/reports/2025/report.parquet",
+        "nas:nas-account-1://shared‑drive/reports/2025/report.parquet",
         "nas-account-1",
         "shared‑drive",
         "reports/2025/report.parquet",
@@ -43,22 +43,24 @@ NAS_CASES: list[tuple[str, str, str]] = [
 ]
 
 INVALID_URIS: list[str] = [
-    "s3://account/bucket/key",  # unsupported scheme
-    "r2://account/missing‑key/",  # empty key
-    "r2://account/no‑bucket.txt",  # empty bucket
+    "s3:account://bucket/key",  # unsupported scheme
+    "b2:account://missing‑key/",  # empty key
+    "b2:account://no‑bucket.txt",  # empty bucket
     "/absolute/filesystem/path.txt",  # no scheme at all
+    "b2://account/bucket/key",  # old format
+    "nas://account/drive/path",  # old format
 ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# R2Path  ↔︎  string
+# B2Path  ↔︎  string
 # ─────────────────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("uri,nickname,bucket,key", R2_CASES, ids=lambda c: c[0])
-def test_r2path_parse_roundtrip(uri: str, nickname: str, bucket: str, key: str) -> None:
-    r2 = R2Path.model_validate(uri)
-    assert (r2.endpoint_nickname, r2.bucket, r2.key) == (nickname, bucket, key)
-    assert json.loads(r2.model_dump_json()) == uri
-    assert str(r2) == uri
+@pytest.mark.parametrize("uri,nickname,bucket,key", B2_CASES, ids=lambda c: c[0])
+def test_b2path_parse_roundtrip(uri: str, nickname: str, bucket: str, key: str) -> None:
+    b2 = B2Path.model_validate(uri)
+    assert (b2.endpoint_nickname, b2.bucket, b2.key) == (nickname, bucket, key)
+    assert json.loads(b2.model_dump_json()) == uri
+    assert str(b2) == uri
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -79,7 +81,7 @@ def test_naspath_parse_roundtrip(
 # ─────────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize(
     "uri,expected_type",
-    [(c[0], R2Path) for c in R2_CASES] + [(c[0], NASPath) for c in NAS_CASES],
+    [(c[0], B2Path) for c in B2_CASES] + [(c[0], NASPath) for c in NAS_CASES],
     ids=lambda x: x,
 )
 def test_filelocation_coercion(uri: str, expected_type: t.Type[BaseModel]) -> None:
@@ -108,8 +110,8 @@ class JobSpec(BaseModel):
 
 def test_job_spec_basic_roundtrip() -> None:
     data = {
-        "source": "r2://account/data‑bucket/input.csv",
-        "dest": "nas://account/reports/output.csv",
+        "source": "b2:account://data‑bucket/input.csv",
+        "dest": "nas:account://reports/output.csv",
     }
     spec = JobSpec.model_validate(data)
     assert spec.source.bucket == "data‑bucket"

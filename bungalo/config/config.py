@@ -9,9 +9,16 @@ class RootConfig(BaseSettings):
     slack_webhook_url: str
 
 
+class ManagedHardware(BaseSettings):
+    name: str
+    local_ip: str
+    username: str
+
+
 class NutConfig(BaseSettings):
     shutdown_threshold: int = 20  # Shutdown when battery below 20%
     startup_threshold: int = 50  # Start back up when battery above 50%
+    managed_hardware: list[ManagedHardware] = []
 
 
 class iPhotoBackupConfig(BaseSettings):
@@ -20,13 +27,15 @@ class iPhotoBackupConfig(BaseSettings):
     client_id: str | None = None
     album_name: str = "All Photos"
     photo_size: str = "original"
-    output_directory: FileLocation
+
+    # For the time being we only support NAS output. From there we use
+    # rclone to sync to B2 or another remote location.
+    output_directory: NASPath
 
 
 class SyncPair(BaseSettings):
     src: FileLocation
     dst: FileLocation
-    encrypt: bool = True
 
 
 class RemoteBackupConfig(BaseSettings):
@@ -49,8 +58,8 @@ class BungaloConfig(BaseSettings):
     nut: NutConfig = Field(default_factory=NutConfig)
 
     # Backups
-    iphoto: iPhotoBackupConfig
-    remote: RemoteBackupConfig
+    iphoto: iPhotoBackupConfig | None = None
+    backups: RemoteBackupConfig
 
     # Storage locations
     endpoints: EndpointConfig = Field(default_factory=EndpointConfig)

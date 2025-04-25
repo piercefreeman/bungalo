@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 from bungalo.backups.remote import (
     RCloneSync,
@@ -20,7 +21,7 @@ def nas_endpoint() -> NASEndpoint:
         nickname="mynas1",
         ip_address="192.168.0.2",
         username="user",
-        password="pass",
+        password=SecretStr("pass"),
         domain="",
     )
 
@@ -30,7 +31,7 @@ def b2_endpoint() -> B2Endpoint:
     return B2Endpoint(
         nickname="myb2",
         key_id="akid",
-        application_key="akey",
+        application_key=SecretStr("akey"),
     )
 
 
@@ -48,8 +49,8 @@ def endpoints(
 def sync_pairs() -> list[SyncPair]:
     return [
         SyncPair(
-            src="nas://mynas1/drive/folder",
-            dst="b2://myb2/bucket/folder",
+            src="nas://mynas1/drive/folder",  # type: ignore
+            dst="b2://myb2/bucket/folder",  # type: ignore
         )
     ]
 
@@ -111,19 +112,19 @@ def _get_section_config(lines: list[str], section_name: str) -> dict[str, str]:
 
 
 def test_validate_endpoints_raises_on_duplicate_nicknames() -> None:
-    duplicated_endpoints = [
+    duplicated_endpoints: list[EndpointBase] = [
         NASEndpoint(
             nickname="mynas1",
             ip_address="192.168.0.2",
             username="user",
-            password="pass",
+            password=SecretStr("pass"),
             domain="",
         ),
         NASEndpoint(
             nickname="mynas1",
             ip_address="192.168.0.3",
             username="user2",
-            password="pass2",
+            password=SecretStr("pass2"),
             domain="",
         ),
     ]

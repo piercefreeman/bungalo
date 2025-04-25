@@ -1,25 +1,19 @@
 from abc import ABC, abstractmethod
 from typing import Annotated
-from urllib.parse import urlparse
 
 from pydantic import BaseModel, BeforeValidator, model_serializer, model_validator
 
 
 class PathBase(BaseModel, ABC):
     """
-    By convention, all paths are represented as URIs that are prefixed with the
-    nickname of the endpoint/account that is being used to access them.
+    By convention, all paths are represented as URIs where the endpoint nickname
+    is part of the scheme, followed by the actual path.
 
     For instance:
-
-    Instead of a true r2 path being:
-    r2://my‑bucket/nested/path/data.csv
-
-    We use the nickname of the endpoint/account to prefix the path:
-    r2://r2-account-1/my‑bucket/nested/path/data.csv
+    b2:r2-account-1://my‑bucket/nested/path/data.csv
+    nas:nas-account-1://shared‑drive/reports/data.csv
 
     Common helper: accepts a URI string & dumps back to the same string.
-
     """
 
     endpoint_nickname: str
@@ -48,17 +42,18 @@ class PathBase(BaseModel, ABC):
 
     @classmethod
     def parse_endpoint_uri(cls, v: str) -> tuple[str, str, str, str]:
-        p = urlparse(v)
-        endpoint_nickname = p.netloc
-        path_portions = p.path.lstrip("/").split("/")
-        if len(path_portions) < 2:
-            raise ValueError("URI must include both endpoint_nickname *and* path")
-        return (
-            p.scheme,
-            endpoint_nickname,
-            path_portions[0],
-            "/".join(path_portions[1:]),
-        )
+        """Parse a URI in the format type:endpoint://path into components"""
+        try:
+            base_scheme, endpoint = v.split(":", 1)
+            endpoint, path = endpoint.split("://", 1)
+        except ValueError:
+            raise ValueError("URI must be in format type:endpoint://path")
+
+        path_portions = path.split("/", 1)
+        first_path_item = path_portions[0] if len(path_portions) > 0 else ""
+        second_path_item = path_portions[1] if len(path_portions) > 1 else ""
+
+        return (base_scheme, endpoint, first_path_item, second_path_item)
 
 
 class B2Path(PathBase):
@@ -68,8 +63,8 @@ class B2Path(PathBase):
     @staticmethod
     def _from_uri(v: str) -> dict[str, str]:
         scheme, endpoint_nickname, bucket, key = B2Path.parse_endpoint_uri(v)
-        if scheme != "b2" or not key.strip():
-            raise ValueError("b2 URI must be b2://<endpoint_nickname>/<bucket>/<key>")
+        if scheme != "b2" or not bucket.strip():
+            raise ValueError("b2 URI must be b2:endpoint://bucket/key")
         return {
             "endpoint_nickname": endpoint_nickname,
             "bucket": bucket,
@@ -78,7 +73,7 @@ class B2Path(PathBase):
         }
 
     def __str__(self) -> str:
-        return f"b2://{self.endpoint_nickname}/{self.bucket}/{self.key}"
+        return f"b2:{self.endpoint_nickname}://{self.bucket}/{self.key}"
 
 
 class NASPath(PathBase):
@@ -88,8 +83,8 @@ class NASPath(PathBase):
     @staticmethod
     def _from_uri(v: str) -> dict[str, str]:
         scheme, endpoint_nickname, drive, path = NASPath.parse_endpoint_uri(v)
-        if scheme != "nas" or not path.strip():
-            raise ValueError("nas URI must be nas://<endpoint_nickname>/<drive>/<path>")
+        if scheme != "nas" or not drive.strip():
+            raise ValueError("nas URI must be nas:endpoint://drive/path")
         return {
             "endpoint_nickname": endpoint_nickname,
             "drive_name": drive,
@@ -98,7 +93,7 @@ class NASPath(PathBase):
         }
 
     def __str__(self) -> str:
-        return f"nas://{self.endpoint_nickname}/{self.drive_name}/{self.path}"
+        return f"nas:{self.endpoint_nickname}://{self.drive_name}/{self.path}"
 
 
 def _parse_file_location(v):
@@ -106,7 +101,11 @@ def _parse_file_location(v):
         return v
     if not isinstance(v, str):
         raise TypeError("FileLocation expects a URI string")
-    scheme = urlparse(v).scheme
+    try:
+        scheme = v.split(":", 1)[0]
+    except IndexError:
+        raise ValueError("Invalid URI format")
+
     if scheme == "b2":
         return B2Path._from_uri(v)
     if scheme == "nas":

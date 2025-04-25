@@ -353,6 +353,10 @@ async def main(config: BungaloConfig) -> None:
 
     Mounts NAS drive using SMB and performs photo synchronization.
     """
+    if not config.iphoto:
+        CONSOLE.print("iPhoto backup not configured, skipping")
+        return
+
     slack_client = SlackClient(config.root.slack_webhook_url)
 
     while True:
