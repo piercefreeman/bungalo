@@ -1,8 +1,8 @@
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings
 
-from bungalo.config.endpoints import NASEndpoint, R2Endpoint
-from bungalo.config.paths import FileLocation, NASPath, R2Path
+from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint
+from bungalo.config.paths import B2Path, FileLocation, NASPath
 
 
 class RootConfig(BaseSettings):
@@ -23,18 +23,22 @@ class iPhotoBackupConfig(BaseSettings):
     output_directory: FileLocation
 
 
-class RemoteSync(BaseSettings):
+class SyncPair(BaseSettings):
     src: FileLocation
     dst: FileLocation
+    encrypt: bool = True
 
 
 class RemoteBackupConfig(BaseSettings):
-    sync: list[RemoteSync]
+    sync: list[SyncPair]
 
 
 class EndpointConfig(BaseSettings):
-    r2: list[R2Endpoint] = []
+    b2: list[B2Endpoint] = []
     nas: list[NASEndpoint] = []
+
+    def get_all(self) -> list[EndpointBase]:
+        return self.b2 + self.nas
 
 
 class BungaloConfig(BaseSettings):
@@ -52,17 +56,17 @@ class BungaloConfig(BaseSettings):
     endpoints: EndpointConfig = Field(default_factory=EndpointConfig)
 
     # Validate that all of the remote files that were validated to NAS files or
-    # R2 accounts match the nicknames that we have specified
+    # B2 accounts match the nicknames that we have specified
     @model_validator(mode="after")
     def _validate_file_locations(self):
         """
-        Walk the *entire* model tree, find every `R2Path`/`NASPath`, and
+        Walk the *entire* model tree, find every `B2Path`/`NASPath`, and
         ensure at least one matching endpoint accepts it.
         """
 
         def walk(obj):
-            """Yield every FileLocation object (R2Path | NASPath) in `obj`."""
-            if isinstance(obj, (R2Path, NASPath)):
+            """Yield every FileLocation object (B2Path | NASPath) in `obj`."""
+            if isinstance(obj, (B2Path, NASPath)):
                 yield obj
             elif isinstance(obj, BaseModel):
                 for field in obj.model_fields:
@@ -75,14 +79,14 @@ class BungaloConfig(BaseSettings):
                     yield from walk(val)
 
         for loc in walk(self):
-            endpoints: list[R2Endpoint | NASEndpoint] = (
-                self.endpoints.r2 if isinstance(loc, R2Path) else self.endpoints.nas
+            endpoints: list[B2Endpoint | NASEndpoint] = (
+                self.endpoints.b2 if isinstance(loc, B2Path) else self.endpoints.nas
             )
 
             if not any(ep.validate_path(loc) for ep in endpoints):
                 raise ValueError(
                     f"File location {loc!s} does not match any configured "
-                    f"{'R2' if isinstance(loc, R2Path) else 'NAS'} endpoint nickname"
+                    f"{'B2' if isinstance(loc, B2Path) else 'NAS'} endpoint nickname"
                 )
 
         return self

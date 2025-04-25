@@ -23,6 +23,7 @@ class PathBase(BaseModel, ABC):
     """
 
     endpoint_nickname: str
+    full_path: str
 
     @model_validator(mode="before")
     @classmethod
@@ -60,19 +61,24 @@ class PathBase(BaseModel, ABC):
         )
 
 
-class R2Path(PathBase):
+class B2Path(PathBase):
     bucket: str
     key: str
 
     @staticmethod
     def _from_uri(v: str) -> dict[str, str]:
-        scheme, endpoint_nickname, bucket, key = R2Path.parse_endpoint_uri(v)
-        if scheme != "r2" or not key.strip():
-            raise ValueError("r2 URI must be r2://<endpoint_nickname>/<bucket>/<key>")
-        return {"endpoint_nickname": endpoint_nickname, "bucket": bucket, "key": key}
+        scheme, endpoint_nickname, bucket, key = B2Path.parse_endpoint_uri(v)
+        if scheme != "b2" or not key.strip():
+            raise ValueError("b2 URI must be b2://<endpoint_nickname>/<bucket>/<key>")
+        return {
+            "endpoint_nickname": endpoint_nickname,
+            "bucket": bucket,
+            "key": key,
+            "full_path": f"/{bucket}/{key}",
+        }
 
     def __str__(self) -> str:
-        return f"r2://{self.endpoint_nickname}/{self.bucket}/{self.key}"
+        return f"b2://{self.endpoint_nickname}/{self.bucket}/{self.key}"
 
 
 class NASPath(PathBase):
@@ -88,6 +94,7 @@ class NASPath(PathBase):
             "endpoint_nickname": endpoint_nickname,
             "drive_name": drive,
             "path": path,
+            "full_path": f"/{drive}/{path}",
         }
 
     def __str__(self) -> str:
@@ -95,16 +102,16 @@ class NASPath(PathBase):
 
 
 def _parse_file_location(v):
-    if isinstance(v, (R2Path, NASPath)):
+    if isinstance(v, (B2Path, NASPath)):
         return v
     if not isinstance(v, str):
         raise TypeError("FileLocation expects a URI string")
     scheme = urlparse(v).scheme
-    if scheme == "r2":
-        return R2Path._from_uri(v)
+    if scheme == "b2":
+        return B2Path._from_uri(v)
     if scheme == "nas":
         return NASPath._from_uri(v)
     raise ValueError(f"Unsupported URI scheme '{scheme}'")
 
 
-FileLocation = Annotated[R2Path | NASPath, BeforeValidator(_parse_file_location)]
+FileLocation = Annotated[B2Path | NASPath, BeforeValidator(_parse_file_location)]

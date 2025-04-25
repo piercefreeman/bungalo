@@ -28,6 +28,12 @@ During bootstrapping we will write the necessary system files for NUT so the sys
 
 During steady state operation, we poll for the UPS status from our locally running NUT daemon every 10s. When the total charge dips below the `nut_shutdown_threshold` threshold, we will perform an ssh shutdown into the network devices so they have time to shutdown gracefully without data loss.
 
+### Data Backups
+
+Backup data on a schedule.
+
+Backups made to remote locations are encrypted by default via rclone's crypt provider.
+
 ### Authorized Keys
 
 The `SSHManager` manages a local bungalo ssh credential that we place into the bungalo owned folder at `~/.bungalo`.

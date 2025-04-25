@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
-from bungalo.config.paths import FileLocation, NASPath, R2Path
+from bungalo.config.paths import B2Path, FileLocation, NASPath
 
 
 class EndpointBase(BaseSettings, ABC):
@@ -26,15 +27,16 @@ class EndpointBase(BaseSettings, ABC):
 class NASEndpoint(EndpointBase):
     ip_address: str
     username: str
-    password: str
+    password: SecretStr
     domain: str = "WORKGROUP"
 
     def validate_path(self, path: FileLocation) -> bool:
         return isinstance(path, NASPath) and path.endpoint_nickname == self.nickname
 
 
-class R2Endpoint(EndpointBase):
-    api_key: str
+class B2Endpoint(EndpointBase):
+    key_id: str
+    application_key: SecretStr
 
     def validate_path(self, path: FileLocation) -> bool:
-        return isinstance(path, R2Path) and path.endpoint_nickname == self.nickname
+        return isinstance(path, B2Path) and path.endpoint_nickname == self.nickname

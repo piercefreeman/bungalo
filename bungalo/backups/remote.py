@@ -1,88 +1,144 @@
 import asyncio
-import json
-from dataclasses import dataclass
+import contextlib
+from contextlib import asynccontextmanager, contextmanager
+from inspect import isclass
 from pathlib import Path
-from typing import Any, Dict, List
+from traceback import format_exc
+from typing import Generator
 
-from bungalo.backups.nas import mount_smb
-from bungalo.config import BungaloConfig
+from pydantic import BaseModel, Field, IPvAnyAddress, SecretStr, model_validator
+
+from bungalo.config.config import BungaloConfig, SyncPair
+from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint
+from bungalo.config.paths import FileLocation
 from bungalo.logger import CONSOLE
 from bungalo.slack import SlackClient
 
 
-@dataclass
-class RemoteConfig:
-    """Configuration for a remote sync pair using rclone."""
+class RemoteBase(BaseModel):
+    """
+    Definition that mirrors the Rclone remote definition. Used for validating
+    the remote configuration before syncing.
 
-    src: str
-    destinations: List[str]
-    platform: str
+    """
+
+    name: str = Field(..., pattern=r"^[A-Za-z0-9_\-]+$")
+    type: str
+
+    def to_rclone_config(self) -> list[str]:
+        """Convert the remote configuration to rclone's native format."""
+        lines = [f"[{self.name}]"]
+        config_dict = self.model_dump(
+            exclude={"name"}, mode="json", by_alias=True, exclude_none=True
+        )
+
+        for key, value in config_dict.items():
+            field_definition = self.__class__.model_fields.get(key)
+            if (
+                field_definition
+                and isclass(field_definition.annotation)
+                and issubclass(field_definition.annotation, SecretStr)
+            ):
+                raw_value = getattr(self, key)
+                value = raw_value.get_secret_value()
+            lines.append(f"{key} = {value}")
+
+        lines.append("")  # Empty line after section
+        return lines
+
+
+class SMBRemote(RemoteBase):
+    type: str = "smb"
+    host: IPvAnyAddress | str
+    user: str
+    password: SecretStr
+    domain: str | None = None
+
+    @model_validator(mode="after")
+    def validate_host(cls, value):  # noqa: N805
+        if not value.host:
+            raise ValueError("SMB remote must include 'host'")
+        return value
+
+
+class B2Remote(RemoteBase):
+    type: str = "s3"
+    provider: str = "Backblaze"
+    access_key_id: str
+    secret_access_key: SecretStr
 
 
 class RCloneSync:
-    """
-    Manages remote sync operations using rclone.
-
-    Handles configuration generation and execution of sync operations
-    between source and multiple destination paths on specified platforms.
-    """
-
     def __init__(
         self,
         config_path: Path,
-        remotes: List[RemoteConfig],
-        slack_webhook_url: str | None = None,
+        endpoints: dict[str, EndpointBase],
+        pairs: list[SyncPair],
+        slack_client: SlackClient | None = None,
     ) -> None:
-        """
-        Initialize the RClone sync manager.
-
-        Args:
-            config_path: Path where rclone config should be written
-            remotes: List of remote configurations to process
-            slack_webhook_url: Optional Slack webhook for notifications
-        """
         self.config_path = config_path
-        self.remotes = remotes
-        self.slack_client = (
-            SlackClient(slack_webhook_url) if slack_webhook_url else None
-        )
+        self.endpoints = endpoints
+        self.pairs = pairs
+        self.slack_client = slack_client
 
     def write_config(self) -> None:
-        """
-        Write the rclone configuration file based on remote definitions.
+        config_lines = []
+        for nickname, endpoint in self.endpoints.items():
+            if isinstance(endpoint, NASEndpoint):
+                smb_remote = SMBRemote(
+                    name=nickname,
+                    host=endpoint.ip_address,
+                    user=endpoint.username,
+                    password=endpoint.password,
+                    domain=endpoint.domain,
+                )
+                config_lines.extend(smb_remote.to_rclone_config())
 
-        Generates and saves an rclone config file with the specified remotes
-        in the format that rclone expects.
-        """
-        config: Dict[str, Any] = {}
+            elif isinstance(endpoint, B2Endpoint):
+                b2_remote = B2Remote(
+                    name=nickname,
+                    access_key_id=endpoint.key_id,
+                    secret_access_key=endpoint.application_key,
+                )
+                config_lines.extend(b2_remote.to_rclone_config())
 
-        for remote in self.remotes:
-            # Create a unique name for each destination
-            for idx, dst in enumerate(remote.destinations):
-                remote_name = f"{remote.platform}_{idx}"
-                config[remote_name] = {
-                    "type": remote.platform,
-                    "path": dst,
-                }
+            else:
+                raise TypeError(f"Unsupported endpoint class: {type(endpoint)}")
 
-        # Ensure the config directory exists
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text("".join(f"{line}\n" for line in config_lines))
+        CONSOLE.print(f"rclone config written → {self.config_path}")
 
-        # Write the config in rclone's JSON format
-        with open(self.config_path, "w") as f:
-            json.dump(config, f, indent=4)
+    async def sync_all(self) -> None:
+        for pair in self.pairs:
+            try:
+                async with self._pair_context(pair) as (resolved_src, resolved_dst):
+                    await self._run_sync(resolved_src, resolved_dst)
+            except Exception as exc:
+                CONSOLE.print(f"Traceback: {format_exc()}")
+                await self._alert(f"Sync {pair.src} → {pair.dst} failed: {exc}")
 
-        CONSOLE.print(f"Written rclone config to {self.config_path}")
+    @asynccontextmanager
+    async def _pair_context(
+        self, pair: SyncPair
+    ) -> Generator[tuple[str, str], None, None]:
+        with contextlib.ExitStack() as stack:
+            resolved_src = stack.enter_context(self._location_context(pair.src))
+            resolved_dst = stack.enter_context(self._location_context(pair.dst))
+            yield resolved_src, resolved_dst
 
-    async def sync(self, src: str, dst: str) -> None:
-        """
-        Execute a single rclone sync operation.
+    @contextmanager
+    def _location_context(self, location: FileLocation) -> Generator[str, None, None]:
+        endpoint = self.endpoints[location.endpoint_nickname]
 
-        Args:
-            src: Source path to sync from
-            dst: Destination path to sync to
-        """
-        cmd = [
+        # Handle additional processing necessary to prepare the FileLocation for transfer
+        # We previously used this for SMB mounts via mount_smb, but now we just configure
+        # directly in rclone.
+
+        yield f"{endpoint.nickname}:{location.full_path}"
+
+    async def _run_sync(self, src: str, dst: str) -> None:
+        process = await asyncio.create_subprocess_exec(
             "rclone",
             "sync",
             "--config",
@@ -90,100 +146,57 @@ class RCloneSync:
             src,
             dst,
             "--progress",
-        ]
-
-        CONSOLE.print(f"Starting sync from {src} to {dst}")
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-
         stdout, stderr = await process.communicate()
+        if process.returncode:
+            raise RuntimeError(stderr.decode() or stdout.decode())
+        await self._alert(f"Synced {src} → {dst}")
 
-        if process.returncode != 0:
-            error_msg = f"Sync failed from {src} to {dst}: {stderr.decode()}"
-            CONSOLE.print(error_msg)
-            if self.slack_client:
-                await self.slack_client.send_message(error_msg)
-        else:
-            success_msg = f"Successfully synced {src} to {dst}"
-            CONSOLE.print(success_msg)
-            if self.slack_client:
-                await self.slack_client.send_message(success_msg)
+    async def _alert(self, message: str) -> None:
+        CONSOLE.print(message)
+        if self.slack_client:
+            await self.slack_client.send_message(message)
 
-    async def sync_all(self, mount_dir: Path) -> None:
-        """
-        Execute all configured sync operations sequentially.
 
-        Args:
-            mount_dir: Path to the mounted NAS directory to use as base path
+def validate_endpoints(endpoints: list[EndpointBase]) -> dict[str, EndpointBase]:
+    """
+    Since the client config allows clients to specify their own nicknames for
+    endpoints, we need to validate that no two endpoints have the same nickname.
 
-        Processes each remote configuration and syncs the source
-        to all specified destinations one at a time.
-        """
-        for remote in self.remotes:
-            # Resolve source path relative to mount directory if it's a relative path
-            src_path = (
-                (mount_dir / remote.src)
-                if not Path(remote.src).is_absolute()
-                else Path(remote.src)
+    """
+    endpoints_by_nickname: dict[str, EndpointBase] = {}
+    for endpoint in endpoints:
+        if endpoint.nickname in endpoints_by_nickname:
+            raise ValueError(
+                f"Duplicate endpoint nickname detected: '{endpoint.nickname}'"
             )
-
-            for dst in remote.destinations:
-                try:
-                    await self.sync(str(src_path), dst)
-                except Exception as e:
-                    error_msg = f"Error during sync operation: {str(e)}"
-                    CONSOLE.print(error_msg)
-                    if self.slack_client:
-                        await self.slack_client.send_message(error_msg)
+        endpoints_by_nickname[endpoint.nickname] = endpoint
+    return endpoints_by_nickname
 
 
 async def main(config: BungaloConfig) -> None:
-    """
-    Main entry point for remote backup process.
+    endpoints_by_nickname = validate_endpoints(config.endpoints.get_all())
+    sync_pairs = [SyncPair.model_validate(raw_pair) for raw_pair in config.remote.sync]
 
-    Args:
-        config: Bungalo configuration containing remote sync details
-
-    Continuously runs sync operations every 6 hours, mounting the NAS
-    before each sync operation.
-    """
-    # Convert config to RemoteConfig objects
-    remotes = [
-        RemoteConfig(
-            src=remote.src, destinations=remote.destinations, platform=remote.platform
-        )
-        for remote in config.remote.remotes
-    ]
-
-    rclone = RCloneSync(
+    rclone_sync = RCloneSync(
         config_path=Path(config.remote.config_path),
-        remotes=remotes,
-        slack_webhook_url=config.root.slack_webhook_url,
+        endpoints=endpoints_by_nickname,
+        pairs=sync_pairs,
+        slack_client=(
+            SlackClient(config.root.slack_webhook_url)
+            if config.root.slack_webhook_url
+            else None
+        ),
     )
-
-    # Write initial config
-    rclone.write_config()
+    rclone_sync.write_config()
 
     while True:
         try:
-            with mount_smb(
-                server=config.nas.ip_address,
-                share=config.nas.drive_name,
-                username=config.nas.username,
-                password=config.nas.password,
-                domain=config.nas.domain,
-            ) as mount_dir:
-                CONSOLE.print(f"SMB share mounted at: {mount_dir}")
-                await rclone.sync_all(mount_dir)
-
-        except Exception as e:
-            if rclone.slack_client:
-                await rclone.slack_client.send_message(
-                    f"Error in remote sync: {str(e)}"
-                )
-            CONSOLE.print(f"Error in remote sync: {str(e)}")
-
-        # Wait 6 hours before next sync
+            await rclone_sync.sync_all()
+        except Exception as exc:
+            CONSOLE.print(f"Sync failed: {exc}")
+            if rclone_sync.slack_client:
+                await rclone_sync.slack_client.send_message(f"Sync round failed: {exc}")
         await asyncio.sleep(6 * 60 * 60)

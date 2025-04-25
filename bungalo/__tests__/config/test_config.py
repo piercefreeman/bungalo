@@ -12,7 +12,7 @@ from bungalo.config.config import (
     RootConfig,
     iPhotoBackupConfig,
 )
-from bungalo.config.endpoints import NASEndpoint, R2Endpoint
+from bungalo.config.endpoints import B2Endpoint, NASEndpoint
 from bungalo.config.paths import NASPath, R2Path
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,10 +111,10 @@ def test_fully_parameterized_config(config_dict: dict[str, Any]) -> None:
     assert isinstance(config.remote.sync[0].dst, R2Path)
 
     assert isinstance(config.endpoints, EndpointConfig)
-    assert len(config.endpoints.r2) == 1
-    assert isinstance(config.endpoints.r2[0], R2Endpoint)
-    assert config.endpoints.r2[0].nickname == "backup"
-    assert config.endpoints.r2[0].api_key == "test_api_key_1"
+    assert len(config.endpoints.b2) == 1
+    assert isinstance(config.endpoints.b2[0], B2Endpoint)
+    assert config.endpoints.b2[0].nickname == "backup"
+    assert config.endpoints.b2[0].api_key == "test_api_key_1"
 
     assert len(config.endpoints.nas) == 2
     assert isinstance(config.endpoints.nas[0], NASEndpoint)

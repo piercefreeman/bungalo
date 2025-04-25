@@ -24,25 +24,23 @@ def mount_smb(
     Context manager that temporarily mounts an SMB share and yields the mount path.
     Linux-only implementation using mount.cifs.
 
-    Args:
-        server: The SMB server hostname or IP address (e.g., "192.168.1.172")
-        share: The name of the share on the server. This is the specific folder being shared.
-               For example "backup", "media", "documents", etc. Use empty string for root.
-        username: Username for authentication. Use empty string for guest/anonymous access.
-        password: Password for authentication. Use empty string for guest/anonymous access.
-        domain: Optional Windows domain for authentication (often not needed for home networks)
-        mount_options: Optional dictionary of additional mount options
-        mount_point: Optional specific mount point, if not provided a temporary directory will be created
+    :param server: The SMB server hostname or IP address (e.g., "192.168.1.172")
+    :param share: The name of the share on the server. This is the specific folder being shared.
+        For example "backup", "media", "documents", etc. Use empty string for root.
+    :param username: Username for authentication. Use empty string for guest/anonymous access.
+    :param password: Password for authentication. Use empty string for guest/anonymous access.
+    :param domain: Optional Windows domain for authentication (often not needed for home networks)
+    :param mount_options: Optional dictionary of additional mount options
+    :param mount_point: Optional specific mount point, if not provided a temporary directory will be created
 
-    Yields:
-        Path object pointing to the mounted directory
+    :yields: Path object pointing to the mounted directory
 
-    Raises:
-        subprocess.CalledProcessError: If mounting or unmounting fails
+    :raises: subprocess.CalledProcessError: If mounting or unmounting fails
 
     Note:
         If you only have an SMB URL like "smb://192.168.1.172", the server is "192.168.1.172"
         and you'll need to know which share to connect to on that server.
+
     """
     # Fallback to a temporary directory if no mount point is provided
     temp_dir: tempfile.TemporaryDirectory | None = None
