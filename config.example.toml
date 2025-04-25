@@ -1,21 +1,30 @@
 [root]
 slack_webhook_url = "https://hooks.slack.com/..."
 
-[[managed_hardware]]
+[[nut.managed_hardware]]
   name = "NAS"
   local_ip = "192.168.1.172"
   username = "root"
 
-[[managed_hardware]]
+[[nut.managed_hardware]]
   name = "Dream Machine"
   local_ip = "192.168.1.1"
   username = "root"
 
-[nas]
+[[endpoints.nas]]
+  nickname = "unifi-nas"
   ip_address = "192.168.1.172"
-  drive_name = "NAS"
   username = "root"
   password = "password"
+
+[[endpoints.b2]]
+  nickname = "b2-us
+  key_id = ""
+  application_key = ""
+
+[[backups.sync]]
+  src = "nas:unifi-nas://Common_Drive"
+  dst = "b2-eu:bungalo-nas-eu://common_drive"
 
 [iphoto]
   username = "your_username"

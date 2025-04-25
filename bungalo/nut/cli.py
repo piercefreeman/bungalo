@@ -25,7 +25,7 @@ async def main(config: BungaloConfig):
                 hostname=client.local_ip,
                 username=client.username,
             )
-            for client in config.managed_hardware
+            for client in config.nut.managed_hardware
         ]
     )
     slack_client = SlackClient(config.root.slack_webhook_url)

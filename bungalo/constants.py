@@ -6,3 +6,6 @@ DEFAULT_SSH_KEY_PATH = "~/.bungalo/id_rsa"
 
 # Default config file path
 DEFAULT_CONFIG_FILE = "~/.bungalo/config.toml"
+
+# Default rclone config file path
+DEFAULT_RCLONE_CONFIG_FILE = "~/.bungalo/rclone.conf"

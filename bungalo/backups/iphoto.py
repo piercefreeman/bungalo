@@ -23,6 +23,7 @@ from tzlocal import get_localzone
 
 from bungalo.backups.nas import mount_smb
 from bungalo.config import BungaloConfig
+from bungalo.config.endpoints import NASEndpoint
 from bungalo.io import progress_bar
 from bungalo.logger import CONSOLE, LOGGER
 from bungalo.slack import SlackClient
@@ -353,16 +354,32 @@ async def main(config: BungaloConfig) -> None:
 
     Mounts NAS drive using SMB and performs photo synchronization.
     """
+    if not config.iphoto:
+        CONSOLE.print("iPhoto backup not configured, skipping")
+        return
+
     slack_client = SlackClient(config.root.slack_webhook_url)
+
+    endpoint = next(
+        (
+            e
+            for e in config.endpoints.get_all()
+            if isinstance(e, NASEndpoint)
+            and e.nickname == config.iphoto.output.endpoint_nickname
+        ),
+        None,
+    )
+    if not endpoint:
+        raise ValueError("No NAS endpoint found in config")
 
     while True:
         try:
             with mount_smb(
-                server=config.nas.ip_address,
-                share=config.nas.drive_name,
-                username=config.nas.username,
-                password=config.nas.password,
-                domain=config.nas.domain,
+                server=endpoint.ip_address,
+                share=config.iphoto.output.drive_name,
+                username=endpoint.username,
+                password=endpoint.password.get_secret_value(),
+                domain=endpoint.domain,
             ) as mount_dir:
                 CONSOLE.print(f"SMB share mounted at: {mount_dir}")
 
@@ -372,7 +389,8 @@ async def main(config: BungaloConfig) -> None:
                     client_id=config.iphoto.client_id,
                     album_name=config.iphoto.album_name,
                     photo_size=AssetVersionSize(config.iphoto.photo_size),
-                    output_path=Path(mount_dir) / config.iphoto.output_directory,
+                    # Re-define the output location relative to the mount point
+                    output_path=Path(mount_dir) / config.iphoto.output.path,
                 )
 
                 await iphoto_sync.sync()

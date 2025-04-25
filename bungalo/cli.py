@@ -5,6 +5,7 @@ from tomllib import loads as toml_loads
 from click import group
 
 from bungalo.backups.iphoto import main as iphoto_main
+from bungalo.backups.remote import main as remote_main
 from bungalo.config import BungaloConfig
 from bungalo.constants import DEFAULT_CONFIG_FILE
 from bungalo.io import async_to_sync
@@ -25,6 +26,7 @@ async def run_all():
     await asyncio.gather(
         battery_main(config),
         iphoto_main(config),
+        remote_main(config),
     )
 
 
@@ -42,6 +44,14 @@ async def iphoto_backup():
     """Backup iPhoto library to NAS."""
     config = get_config()
     await iphoto_main(config)
+
+
+@cli.command()
+@async_to_sync
+async def remote_backup():
+    """Backup NAS files to a remote server using rclone."""
+    config = get_config()
+    await remote_main(config)
 
 
 @cli.command()
