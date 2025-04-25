@@ -1,19 +1,17 @@
 import asyncio
 import contextlib
-from base64 import b64encode
 from contextlib import contextmanager
-from inspect import isclass
 from pathlib import Path
 from traceback import format_exc
 from typing import Generator, assert_never
 
-from pydantic import BaseModel, Field, IPvAnyAddress, SecretStr, model_validator
+from pydantic import BaseModel, Field, IPvAnyAddress, model_validator
 
 from bungalo.config.config import BungaloConfig, SyncPair
 from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint
 from bungalo.config.paths import FileLocation
 from bungalo.constants import DEFAULT_RCLONE_CONFIG_FILE
-from bungalo.logger import CONSOLE
+from bungalo.logger import CONSOLE, LOGGER
 from bungalo.slack import SlackClient
 
 
@@ -35,14 +33,6 @@ class RemoteBase(BaseModel):
         )
 
         for key, value in config_dict.items():
-            field_definition = self.__class__.model_fields.get(key)
-            if (
-                field_definition
-                and isclass(field_definition.annotation)
-                and issubclass(field_definition.annotation, SecretStr)
-            ):
-                raw_value = getattr(self, key)
-                value = raw_value.get_secret_value()
             lines.append(f"{key} = {value}")
 
         lines.append("")  # Empty line after section
@@ -53,7 +43,7 @@ class SMBRemote(RemoteBase):
     type: str = "smb"
     host: IPvAnyAddress | str
     user: str
-    password: SecretStr
+    password: str = Field(serialization_alias="pass")
     domain: str | None = None
 
     @model_validator(mode="after")
@@ -64,16 +54,16 @@ class SMBRemote(RemoteBase):
 
 
 class B2Remote(RemoteBase):
-    type: str = "s3"
-    provider: str = "Backblaze"
-    access_key_id: str
-    secret_access_key: SecretStr
+    type: str = "b2"
+    account: str
+    key: str
 
 
 class EncryptedRemote(RemoteBase):
     type: str = "crypt"
     remote: str
-    password: SecretStr
+    password: str
+    directory_name_encryption: str = "off"
 
 
 class RCloneSync:
@@ -89,7 +79,7 @@ class RCloneSync:
         self.pairs = pairs
         self.slack_client = slack_client
 
-    def write_config(self) -> None:
+    async def write_config(self) -> None:
         config_lines = []
         for nickname, endpoint in self.endpoints.items():
             remote: RemoteBase
@@ -98,15 +88,17 @@ class RCloneSync:
                     name=nickname,
                     host=endpoint.ip_address,
                     user=endpoint.username,
-                    password=endpoint.password,
+                    password=await self._encrypt_key(
+                        endpoint.password.get_secret_value()
+                    ),
                     domain=endpoint.domain,
                 )
 
             elif isinstance(endpoint, B2Endpoint):
                 remote = B2Remote(
                     name=nickname,
-                    access_key_id=endpoint.key_id,
-                    secret_access_key=endpoint.application_key,
+                    account=endpoint.key_id,
+                    key=endpoint.application_key.get_secret_value(),
                 )
             else:
                 assert_never(endpoint)
@@ -116,8 +108,16 @@ class RCloneSync:
                 remote.name = f"{raw_remote}-raw"
                 encrypted_remote = EncryptedRemote(
                     name=raw_remote,
-                    remote=remote.name,
-                    password=b64encode(endpoint.encrypt_key.encode()).decode(),
+                    remote=f"{remote.name}:",
+                    password=await self._encrypt_key(
+                        endpoint.encrypt_key.get_secret_value()
+                    ),
+                    # When enabled, we can't pass through our raw bucket name with the crypt->b2
+                    # chained backends. It will try to create a new bucket with the encrypted
+                    # name instead. We could address by specifying an encrypted remote for each
+                    # separate bucket we want to target, but there's not much security risk to
+                    # keeping our directory names in plaintext.
+                    directory_name_encryption="false",
                 )
                 config_lines.extend(encrypted_remote.to_rclone_config())
 
@@ -131,7 +131,9 @@ class RCloneSync:
         for pair in self.pairs:
             try:
                 with self._pair_context(pair) as (resolved_src, resolved_dst):
+                    CONSOLE.print(f"Syncing {resolved_src} → {resolved_dst}")
                     await self._run_sync(resolved_src, resolved_dst)
+                    await self._alert(f"Synced {resolved_src} → {resolved_dst}")
             except Exception as exc:
                 CONSOLE.print(f"Traceback: {format_exc()}")
                 await self._alert(f"Sync {pair.src} → {pair.dst} failed: {exc}")
@@ -161,19 +163,64 @@ class RCloneSync:
             str(self.config_path),
             src,
             dst,
-            "--progress",
+            "--stats",
+            "30s",  # emits one stats line every 30 s
+            "--use-json-log",
+            "--log-format",
+            "time,level,msg",
+            "--stats-log-level",
+            "NOTICE",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        async def _pipe_reader(name: str, stream: asyncio.StreamReader) -> None:
+            async for line in stream:
+                LOGGER.info("%s: %s", name, line.decode().rstrip())
+
+        # Start readers immediately
+        readers = [
+            asyncio.create_task(_pipe_reader("STDOUT", process.stdout)),
+            asyncio.create_task(_pipe_reader("STDERR", process.stderr)),
+        ]
+
+        # Wait for rclone to exit
+        returncode = await process.wait()
+
+        # Make sure all remaining lines are consumed
+        await asyncio.gather(*readers, return_exceptions=True)
+
+        if returncode:
+            raise RuntimeError(f"rclone exited with code {returncode}")
+
+    async def _alert(self, message: str) -> None:
+        CONSOLE.print(message)
+        if self.slack_client:
+            await self.slack_client.send_message(message)
+
+    async def _encrypt_key(self, key: str) -> str:
+        """
+        Use rclone to encrypt a key. This will use an rclone-internal reversable
+        encryption cypher to encrypt the key, then base64 encode the result.
+
+        This prevents "shoulder surfing" of the raw password, not actually leaking
+        it to an outside observer. This central rclone cypher is baked into the executable
+        so generated passwords will still be readable across docker container executions.
+
+        All "pass", "password", "client_secret" fields need to be encrypted with this function.
+
+        """
+        process = await asyncio.create_subprocess_exec(
+            "rclone",
+            "obscure",
+            key,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await process.communicate()
         if process.returncode:
             raise RuntimeError(stderr.decode() or stdout.decode())
-        await self._alert(f"Synced {src} → {dst}")
-
-    async def _alert(self, message: str) -> None:
-        CONSOLE.print(message)
-        if self.slack_client:
-            await self.slack_client.send_message(message)
+        return stdout.decode()
 
 
 def validate_endpoints(endpoints: list[EndpointBase]) -> dict[str, EndpointBase]:
@@ -206,7 +253,7 @@ async def main(config: BungaloConfig) -> None:
             else None
         ),
     )
-    rclone_sync.write_config()
+    await rclone_sync.write_config()
 
     while True:
         try:

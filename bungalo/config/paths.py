@@ -69,7 +69,7 @@ class B2Path(PathBase):
             "endpoint_nickname": endpoint_nickname,
             "bucket": bucket,
             "key": key,
-            "full_path": f"/{bucket}/{key}",
+            "full_path": f"{bucket}/{key}",
         }
 
     def __str__(self) -> str:
@@ -89,7 +89,7 @@ class NASPath(PathBase):
             "endpoint_nickname": endpoint_nickname,
             "drive_name": drive,
             "path": path,
-            "full_path": f"/{drive}/{path}",
+            "full_path": f"{drive}/{path}",
         }
 
     def __str__(self) -> str:

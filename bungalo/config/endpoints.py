@@ -20,7 +20,7 @@ class EndpointBase(BaseSettings, ABC):
 
     """
 
-    encrypt_key: str | None = None
+    encrypt_key: SecretStr | None = None
     """
     The key to use for encrypting the data at rest.
     """
