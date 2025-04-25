@@ -1,6 +1,8 @@
 # bungalo
 
-Control library for our home network.
+Control library for our home network. Bundles all of the logic our homelab needs into a single deployable Docker image.
+
+Maybe even extendable enough for what you want it to do, too.
 
 ## Getting Started
 
@@ -30,9 +32,20 @@ During steady state operation, we poll for the UPS status from our locally runni
 
 ### Data Backups
 
-Backup data on a schedule.
+Our NAS is our network's source of truth for all files. For a full data backup, we conceptually have two separate steps:
 
-Backups made to remote locations are encrypted by default via rclone's crypt provider.
+1. Cloud -> NAS: Sync proprietary clouds like iCloud, Frame.io, and iPhoto into our local storage.
+2. Syncing the full NAS contents to a remote cloud. We're currently architected with two redundency zones, one in Virginia and one in Amsterdam. We copy these files individually with rclone instead of using "Cloud Replication" so we have a bit more control over encryption keys and notification status of completed syncs.
+
+Backups made to remote locations are encrypted via rclone's crypt provider:
+
+```toml
+[[endpoints.b2]]
+  nickname = "b2-eu"
+  key_id = "my_key"
+  application_key = "my_app"
+  encrypt_key = "custom_encryption_key"
+```
 
 ### Authorized Keys
 

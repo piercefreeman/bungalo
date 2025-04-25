@@ -176,6 +176,9 @@ class RCloneSync:
 
         async def _pipe_reader(name: str, stream: asyncio.StreamReader) -> None:
             async for line in stream:
+                # TODO: Parse the JSON log output and write status updates within
+                # a slack thread (use a single contextmanager to wrap the slack
+                # thread context)
                 LOGGER.info("%s: %s", name, line.decode().rstrip())
 
         # Start readers immediately
