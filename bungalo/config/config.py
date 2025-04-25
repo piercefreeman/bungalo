@@ -1,3 +1,5 @@
+from typing import Sequence
+
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings
 
@@ -30,7 +32,7 @@ class iPhotoBackupConfig(BaseSettings):
 
     # For the time being we only support NAS output. From there we use
     # rclone to sync to B2 or another remote location.
-    output_directory: NASPath
+    output: NASPath
 
 
 class SyncPair(BaseSettings):
@@ -46,7 +48,7 @@ class EndpointConfig(BaseSettings):
     b2: list[B2Endpoint] = []
     nas: list[NASEndpoint] = []
 
-    def get_all(self) -> list[EndpointBase]:
+    def get_all(self) -> Sequence[EndpointBase]:
         return self.b2 + self.nas
 
 
@@ -78,7 +80,7 @@ class BungaloConfig(BaseSettings):
             if isinstance(obj, (B2Path, NASPath)):
                 yield obj
             elif isinstance(obj, BaseModel):
-                for field in obj.model_fields:
+                for field in obj.__class__.model_fields:
                     yield from walk(getattr(obj, field))
             elif isinstance(obj, (list, tuple, set)):
                 for item in obj:
@@ -88,7 +90,7 @@ class BungaloConfig(BaseSettings):
                     yield from walk(val)
 
         for loc in walk(self):
-            endpoints: list[B2Endpoint | NASEndpoint] = (
+            endpoints: Sequence[B2Endpoint | NASEndpoint] = (
                 self.endpoints.b2 if isinstance(loc, B2Path) else self.endpoints.nas
             )
 

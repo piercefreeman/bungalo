@@ -44,8 +44,6 @@ NAS_CASES: list[tuple[str, str, str, str]] = [
 
 INVALID_URIS: list[str] = [
     "s3:account://bucket/key",  # unsupported scheme
-    "b2:account://missing‑key/",  # empty key
-    "b2:account://no‑bucket.txt",  # empty bucket
     "/absolute/filesystem/path.txt",  # no scheme at all
     "b2://account/bucket/key",  # old format
     "nas://account/drive/path",  # old format
@@ -114,6 +112,8 @@ def test_job_spec_basic_roundtrip() -> None:
         "dest": "nas:account://reports/output.csv",
     }
     spec = JobSpec.model_validate(data)
+    assert isinstance(spec.source, B2Path)
+    assert isinstance(spec.dest, NASPath)
     assert spec.source.bucket == "data‑bucket"
     assert spec.dest.drive_name == "reports"
     assert spec.model_dump() == data

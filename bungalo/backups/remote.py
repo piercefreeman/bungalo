@@ -3,7 +3,7 @@ import contextlib
 from contextlib import contextmanager
 from pathlib import Path
 from traceback import format_exc
-from typing import Generator, assert_never
+from typing import Generator, Sequence, assert_never
 
 from pydantic import BaseModel, Field, IPvAnyAddress, model_validator
 
@@ -83,25 +83,29 @@ class RCloneSync:
         config_lines = []
         for nickname, endpoint in self.endpoints.items():
             remote: RemoteBase
-            if isinstance(endpoint, NASEndpoint):
-                remote = SMBRemote(
-                    name=nickname,
-                    host=endpoint.ip_address,
-                    user=endpoint.username,
-                    password=await self._encrypt_key(
-                        endpoint.password.get_secret_value()
-                    ),
-                    domain=endpoint.domain,
-                )
-
-            elif isinstance(endpoint, B2Endpoint):
-                remote = B2Remote(
-                    name=nickname,
-                    account=endpoint.key_id,
-                    key=endpoint.application_key.get_secret_value(),
-                )
-            else:
-                assert_never(endpoint)
+            match endpoint:
+                case NASEndpoint():
+                    remote = SMBRemote(
+                        name=nickname,
+                        host=endpoint.ip_address,
+                        user=endpoint.username,
+                        password=await self._encrypt_key(
+                            endpoint.password.get_secret_value()
+                        ),
+                        domain=endpoint.domain,
+                    )
+                case B2Endpoint():
+                    remote = B2Remote(
+                        name=nickname,
+                        account=endpoint.key_id,
+                        key=endpoint.application_key.get_secret_value(),
+                    )
+                case EndpointBase():
+                    raise ValueError(
+                        f"Unsupported base endpoint type: {type(endpoint)}"
+                    )
+                case _:
+                    assert_never(endpoint)
 
             if endpoint.encrypt_key:
                 raw_remote = remote.name
@@ -181,6 +185,9 @@ class RCloneSync:
                 # thread context)
                 LOGGER.info("%s: %s", name, line.decode().rstrip())
 
+        if not process.stdout or not process.stderr:
+            raise RuntimeError("rclone failed to start")
+
         # Start readers immediately
         readers = [
             asyncio.create_task(_pipe_reader("STDOUT", process.stdout)),
@@ -226,7 +233,7 @@ class RCloneSync:
         return stdout.decode()
 
 
-def validate_endpoints(endpoints: list[EndpointBase]) -> dict[str, EndpointBase]:
+def validate_endpoints(endpoints: Sequence[EndpointBase]) -> dict[str, EndpointBase]:
     """
     Since the client config allows clients to specify their own nicknames for
     endpoints, we need to validate that no two endpoints have the same nickname.

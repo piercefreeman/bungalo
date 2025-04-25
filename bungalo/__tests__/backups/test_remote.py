@@ -49,8 +49,8 @@ def endpoints(
 def sync_pairs() -> list[SyncPair]:
     return [
         SyncPair(
-            src="nas://mynas1/drive/folder",  # type: ignore
-            dst="b2://myb2/bucket/folder",  # type: ignore
+            src="nas:mynas1://drive/folder",  # type: ignore
+            dst="b2:myb2://bucket/folder",  # type: ignore
         )
     ]
 
@@ -68,10 +68,18 @@ def rclone(tmp_path, endpoints, sync_pairs) -> RCloneSync:
 # --------------------------------------------------------------------------- #
 #  Tests
 # --------------------------------------------------------------------------- #
-def test_write_config_creates_expected_format(
-    rclone: RCloneSync, tmp_path: Path
+
+
+@pytest.mark.asyncio
+async def test_write_config_creates_expected_format(
+    rclone: RCloneSync, tmp_path: Path, patched_run: tuple[MagicMock, MagicMock]
 ) -> None:
-    rclone.write_config()
+    encrypt_mock = AsyncMock()
+    encrypt_mock.returncode = 0
+    encrypt_mock.communicate.return_value = (b"ENCRYPTED_PASSWORD", b"")
+    patched_run[1].return_value = encrypt_mock
+
+    await rclone.write_config()
     config_path = rclone.config_path
     assert config_path.exists()
 
@@ -84,15 +92,14 @@ def test_write_config_creates_expected_format(
     assert nas_config["type"] == "smb"
     assert nas_config["host"] == "192.168.0.2"
     assert nas_config["user"] == "user"
-    assert nas_config["password"] == "pass"  # Password should not be masked
+    assert nas_config["pass"] == "ENCRYPTED_PASSWORD"
 
     # Validate B2 remote section
     assert "[myb2]" in lines
     b2_config = _get_section_config(lines, "myb2")
-    assert b2_config["type"] == "s3"
-    assert b2_config["provider"] == "Backblaze"
-    assert b2_config["access_key_id"] == "akid"
-    assert b2_config["secret_access_key"] == "akey"  # Secret should not be masked
+    assert b2_config["type"] == "b2"
+    assert b2_config["account"] == "akid"
+    assert b2_config["key"] == "akey"  # secret is not encrypted
 
 
 def _get_section_config(lines: list[str], section_name: str) -> dict[str, str]:

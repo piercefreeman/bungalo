@@ -14,7 +14,7 @@ from bungalo.config.config import (
     iPhotoBackupConfig,
 )
 from bungalo.config.endpoints import B2Endpoint, NASEndpoint
-from bungalo.config.paths import B2Path, FileLocation, NASPath
+from bungalo.config.paths import B2Path, NASPath
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -58,19 +58,17 @@ def config_dict() -> dict[str, Any]:
             "client_id": "test_client_id",
             "album_name": "Test Album",
             "photo_size": "large",
-            "output_directory": "b2://backup/test-bucket/photos",
+            "output": "nas:nas1://test-drive/photos",
         },
-        "remote": {
+        "backups": {
             "sync": [
                 {
-                    "src": "nas://nas1/drive1/documents",
-                    "dst": "b2://backup/backup-bucket/documents",
-                    "encrypt": True,
+                    "src": "nas:nas1://drive1/documents",
+                    "dst": "b2:backup://backup-bucket/documents",
                 },
                 {
-                    "src": "nas://nas2/drive2/media",
-                    "dst": "b2://backup/backup-bucket/media",
-                    "encrypt": False,
+                    "src": "nas:nas2://drive2/media",
+                    "dst": "b2:backup://backup-bucket/media",
                 },
             ]
         },
@@ -80,6 +78,7 @@ def config_dict() -> dict[str, Any]:
                     "nickname": "backup",
                     "key_id": "test_key_id",
                     "application_key": "test_app_key",
+                    "encrypt_key": "test_encrypt_key",
                 },
             ],
             "nas": [
@@ -125,25 +124,22 @@ def test_nut_config_defaults() -> None:
 
 def test_sync_pair_validation() -> None:
     """Test SyncPair validation with different path types."""
-    pair = SyncPair(
-        src="nas://nas1/drive1/test", dst="b2://backup/bucket/test", encrypt=True
-    )
+    pair = SyncPair(src="nas:nas1://drive1/test", dst="b2:backup://bucket/test")  # type: ignore
     assert isinstance(pair.src, NASPath)
     assert isinstance(pair.dst, B2Path)
-    assert pair.encrypt is True
 
 
 def test_b2_endpoint() -> None:
     """Test B2Endpoint configuration and path validation."""
     endpoint = B2Endpoint(
-        nickname="backup", key_id="test_key", application_key="test_secret"
+        nickname="backup", key_id="test_key", application_key=SecretStr("test_secret")
     )
     assert endpoint.nickname == "backup"
     assert isinstance(endpoint.application_key, SecretStr)
 
     # Test path validation
-    valid_path = B2Path._from_uri("b2://backup/bucket/key")
-    invalid_path = B2Path._from_uri("b2://other/bucket/key")
+    valid_path = B2Path._from_uri("b2:backup://bucket/key")
+    invalid_path = B2Path._from_uri("b2:other://bucket/key")
 
     assert endpoint.validate_path(B2Path.model_validate(valid_path))
     assert not endpoint.validate_path(B2Path.model_validate(invalid_path))
@@ -177,16 +173,14 @@ def test_fully_parameterized_config(config_dict: dict[str, Any]) -> None:
     assert config.iphoto.client_id == "test_client_id"
     assert config.iphoto.album_name == "Test Album"
     assert config.iphoto.photo_size == "large"
-    assert isinstance(config.iphoto.output_directory, B2Path)
+    assert isinstance(config.iphoto.output, NASPath)
 
     # Test remote backup config
-    assert isinstance(config.remote, RemoteBackupConfig)
-    assert len(config.remote.sync) == 2
-    assert isinstance(config.remote.sync[0], SyncPair)
-    assert isinstance(config.remote.sync[0].src, NASPath)
-    assert isinstance(config.remote.sync[0].dst, B2Path)
-    assert config.remote.sync[0].encrypt is True
-    assert config.remote.sync[1].encrypt is False
+    assert isinstance(config.backups, RemoteBackupConfig)
+    assert len(config.backups.sync) == 2
+    assert isinstance(config.backups.sync[0], SyncPair)
+    assert isinstance(config.backups.sync[0].src, NASPath)
+    assert isinstance(config.backups.sync[0].dst, B2Path)
 
     # Test endpoints config
     assert isinstance(config.endpoints, EndpointConfig)
@@ -215,21 +209,12 @@ def test_fully_parameterized_config(config_dict: dict[str, Any]) -> None:
 
 def test_invalid_endpoint_nickname(config_dict: dict[str, Any]) -> None:
     """Test that we reject config with invalid endpoint nicknames."""
-    config_dict["remote"]["sync"][0]["src"] = "nas://invalid-nas/drive1/test"
+    config_dict["backups"]["sync"][0]["src"] = "nas:invalid-nas://drive1/test"
     with pytest.raises(ValidationError):
         BungaloConfig.model_validate(config_dict)
 
 
-def test_invalid_path_format() -> None:
-    """Test that invalid path formats are rejected."""
-    with pytest.raises(ValueError):
-        FileLocation("invalid://path")
-
-    with pytest.raises(ValueError):
-        FileLocation("b2://backup")  # Missing path components
-
-
-def test_secret_values() -> None:
+def test_secret_values(config_dict: dict[str, Any]) -> None:
     """Test that sensitive values are properly handled as SecretStr."""
     config = BungaloConfig.model_validate(config_dict)
 

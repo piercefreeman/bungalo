@@ -1,11 +1,12 @@
 from types import SimpleNamespace
+from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 
 @pytest.fixture()
-def patched_run() -> tuple[MagicMock, MagicMock]:
+def patched_run() -> Generator[tuple[MagicMock, MagicMock], None, None]:
     """
     Intercept *all* subprocess.run calls and pretend they succeed.
     """
