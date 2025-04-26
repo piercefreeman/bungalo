@@ -7,12 +7,9 @@ from shutil import copyfile
 from tempfile import TemporaryDirectory
 from typing import Iterator
 
-from foundation.core import constant, identity
+from foundation.core import identity
 from icloudpd import download, exif_datetime
-from icloudpd.authentication import TwoStepAuthRequiredError, authenticator
-from icloudpd.mfa_provider import MFAProvider
 from icloudpd.paths import clean_filename
-from icloudpd.status import StatusExchange
 from pyicloud_ipd.base import PyiCloudService
 from pyicloud_ipd.exceptions import PyiCloudFailedLoginException
 from pyicloud_ipd.file_match import FileMatchPolicy
@@ -54,6 +51,7 @@ class iPhotoSync:
         album_name: str,
         photo_size: AssetVersionSize,
         output_path: Path,
+        slack_client: SlackClient,
         concurrency: int = 10,
     ) -> None:
         """
@@ -74,6 +72,7 @@ class iPhotoSync:
         self.photo_size = photo_size
         self.output_path = output_path
         self.concurrency = concurrency
+        self.slack_client = slack_client
 
         self._completed_photos = 0
 
@@ -86,7 +85,7 @@ class iPhotoSync:
         Uses asyncio for non-blocking concurrent downloads with a queue system
         to control resource usage.
         """
-        icloud = self.icloud_login()
+        icloud = await self.icloud_login()
         CONSOLE.print("Getting photo metadata from album...")
         photos = icloud.photos.albums[self.album_name]
         CONSOLE.print(f"Found {len(photos)} photos, starting to process metadata...")
@@ -296,38 +295,37 @@ class iPhotoSync:
             )
         download.set_utime(str(download_path), created_date)
 
-    def icloud_login(self, cookie_directory: str = "~/.pyicloud") -> PyiCloudService:
+    async def icloud_login(
+        self, cookie_directory: str = "~/.pyicloud"
+    ) -> PyiCloudService:
         """
         Authenticate with iCloud services.
 
         :param cookie_directory: Directory to store authentication cookies
         :return: Authenticated iCloud service instance
-        :raises Exception: If two-factor authentication is required
+        :raises Exception: If authentication fails
         """
-        try:
-            password_providers = {
-                "parameter": (constant(self.password), lambda _r, _w: None)
-            }
-            status_exchange = StatusExchange()
+        LOGGER.debug("Authenticating...")
 
-            return authenticator(
-                logger=LOGGER,
-                domain="com",
-                filename_cleaner=clean_filename,
-                lp_filename_generator=identity,
-                # Default values are provided by the default CLI entrypoint params
-                # https://github.com/icloud-photos-downloader/icloud_photos_downloader/blob/c4a63229c4d490ee86491c660ecd7ababb415b33/src/icloudpd/base.py#L286
-                raw_policy=RawTreatmentPolicy.AS_IS,
-                file_match_policy=FileMatchPolicy.NAME_SIZE_DEDUP_WITH_SUFFIX,
-                password_providers=password_providers,  # type: ignore
-                mfa_provider=MFAProvider.CONSOLE,
-                status_exchange=status_exchange,
-            )(
-                self.username,
-                cookie_directory,
-                False,
-                self.client_id,
-            )
+        icloud = PyiCloudService(
+            filename_cleaner=clean_filename,
+            lp_filename_generator=identity,
+            domain="com",
+            raw_policy=RawTreatmentPolicy.AS_IS,
+            file_match_policy=FileMatchPolicy.NAME_SIZE_DEDUP_WITH_SUFFIX,
+            apple_id=self.username,
+            password=self.password,
+            cookie_directory=cookie_directory,
+            client_id=self.client_id,
+        )
+
+        try:
+            if icloud.requires_2fa or icloud.requires_2sa:
+                LOGGER.info("Two-factor authentication is required")
+                await self.request_2fa(icloud)
+
+            return icloud
+
         except PyiCloudFailedLoginException as e:
             if "503" in str(e):
                 CONSOLE.print(
@@ -339,11 +337,85 @@ class iPhotoSync:
                 CONSOLE.print(
                     "https://github.com/icloud-photos-downloader/icloud_photos_downloader/issues/1078"
                 )
-                raise Exception("503 detected")
-            else:
-                raise e
-        except TwoStepAuthRequiredError:
-            raise Exception("Two-step authentication required")
+                raise Exception("503 detected") from e
+            raise e
+
+    async def request_2fa(self, icloud: PyiCloudService) -> None:
+        """
+        Request and validate two-step authentication through Slack interaction.
+
+        :param icloud: Authenticated iCloud service instance
+        :raises Exception: If 2FA validation fails
+        """
+        devices = icloud.trusted_devices
+        if not devices:
+            raise Exception("No trusted devices found for 2FA")
+
+        # Format device list for Slack message
+        device_list = "\n".join(
+            f"{i}: {device.get('deviceName', f'SMS to {device.get("phoneNumber", "Unknown")}')}"
+            for i, device in enumerate(devices)
+        )
+
+        message = (
+            "🔐 Two-step authentication required\n\n"
+            "Available devices:\n"
+            f"{device_list}\n\n"
+            "Please reply in this thread with a device number."
+        )
+
+        root_message = await self.slack_client.create_status(message)
+
+        try:
+            async with self.slack_client.listen_for_replies(root_message) as queue:
+                device_index_str = (await queue.next(timeout=60))["text"]
+                try:
+                    device_index = int(device_index_str)
+                    if device_index < 0 or device_index >= len(devices):
+                        raise ValueError()
+                except ValueError:
+                    await self.slack_client.create_status(
+                        f"❌ Invalid device index: {device_index_str}. Please choose a number between 0 and {len(devices) - 1}.",
+                        parent_ts=root_message,
+                    )
+                    raise Exception(f"Invalid device index: {device_index_str}")
+
+                device = devices[device_index]
+                await self.slack_client.create_status(
+                    "📱 Sending verification code...", parent_ts=root_message
+                )
+
+                if not icloud.send_verification_code(device):
+                    await self.slack_client.create_status(
+                        "❌ Failed to send verification code", parent_ts=root_message
+                    )
+                    raise Exception("Failed to send verification code")
+
+                await self.slack_client.create_status(
+                    "✉️ Verification code sent. Please enter the code in this thread.",
+                    parent_ts=root_message,
+                )
+
+                verification_code = (await queue.next(timeout=120))["text"]
+
+                if not icloud.validate_verification_code(device, verification_code):
+                    await self.slack_client.create_status(
+                        "❌ Failed to validate verification code",
+                        parent_ts=root_message,
+                    )
+                    raise Exception("Failed to validate verification code")
+
+                await self.slack_client.create_status(
+                    "✅ Two-factor authentication completed successfully!",
+                    parent_ts=root_message,
+                )
+
+        except asyncio.TimeoutError:
+            await self.slack_client.create_status(
+                "⏰ Two-step authentication timed out waiting for response",
+                parent_ts=root_message,
+            )
+            raise Exception("Two-step authentication timed out waiting for response")
 
 
 async def main(config: BungaloConfig) -> None:
@@ -393,6 +465,7 @@ async def main(config: BungaloConfig) -> None:
                     client_id=config.iphoto.client_id,
                     album_name=config.iphoto.album_name,
                     photo_size=AssetVersionSize(config.iphoto.photo_size),
+                    slack_client=slack_client,
                     # Re-define the output location relative to the mount point
                     output_path=Path(mount_dir) / config.iphoto.output.path,
                 )

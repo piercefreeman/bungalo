@@ -15,6 +15,32 @@ class SlackMessage:
     tid: str
 
 
+class MessageQueue:
+    """
+    A simple queue interface for receiving Slack messages.
+    Provides a blocking .next() method to get the next message.
+    """
+
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    async def next(self, timeout: float | None = None) -> dict[str, Any]:
+        """
+        Get the next message from the queue.
+
+        :raises asyncio.TimeoutError: If no message is received within the timeout
+        :return: The next message
+        """
+        return await asyncio.wait_for(
+            self.queue.get(),
+            timeout=timeout,
+        )
+
+    def _put(self, message: dict[str, Any]) -> None:
+        """Internal method to add messages to the queue."""
+        self.queue.put_nowait(message)
+
+
 @dataclass(slots=True, kw_only=True)
 class SlackClient:
     """
@@ -44,8 +70,6 @@ class SlackClient:
     """
     destination channel (could be a DM id)
     """
-
-    default_reply_timeout: float = 60.0
 
     _web: AsyncWebClient | None = None
     _socket: SocketModeClient | None = None
@@ -104,22 +128,25 @@ class SlackClient:
         self,
         parent_ts: SlackMessage,
         *,
-        timeout: float | None = None,
         user_filter: set[str] | None = None,
-    ) -> AsyncGenerator[AsyncGenerator[dict[str, Any], None], None]:
+    ) -> AsyncGenerator[MessageQueue, None]:
         """
+        Listen for replies in a thread.
+
+        Usage:
+        ```python
+        async with client.listen_for_replies(thread_ts) as queue:
+            message = await queue.next()
         ```
-        async with mgr.listen_for_replies(thread_ts) as replies:
-            async for event in replies:
-                ...
-        ```
-        Yields an *async generator* of raw Slack `message` events that match:
-        • `thread_ts == parent_ts`
-        • optional `user_filter`
-        Stops when `timeout` elapses (relative) or the surrounding context exits.
+
+        :param parent_ts: Thread to listen to
+        :param timeout: Maximum time to wait for each message
+        :param user_filter: Optional set of user IDs to filter messages by
+        :return: A MessageQueue that yields messages matching the criteria
+        :raises asyncio.TimeoutError: If no message is received within the timeout
         """
         assert self._socket
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        queue = MessageQueue()
 
         async def _push(client: SocketModeClient, req: SocketModeRequest) -> None:
             if req.type != "events_api":
@@ -131,27 +158,15 @@ class SlackClient:
                 and evt.get("subtype") is None  # ignore edits, bot_msgs, etc.
                 and (user_filter is None or evt.get("user") in user_filter)
             ):
-                queue.put_nowait(evt)
+                queue._put(evt)
 
         self._socket.socket_mode_request_listeners.append(
             cast(AsyncSocketModeRequestListener, _push)
         )
 
-        async def _stream() -> AsyncGenerator[dict[str, Any], None]:
-            while self._running.is_set():
-                try:
-                    nxt = await asyncio.wait_for(
-                        queue.get(),
-                        timeout=timeout or self.default_reply_timeout,
-                    )
-                except asyncio.TimeoutError:
-                    break
-                yield nxt
-
         try:
-            yield _stream()
+            yield queue
         finally:
-            # remove the local listener
             self._socket.socket_mode_request_listeners.remove(
                 cast(AsyncSocketModeRequestListener, _push)
             )
