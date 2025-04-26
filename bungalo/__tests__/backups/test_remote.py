@@ -61,7 +61,7 @@ def rclone(tmp_path, endpoints, sync_pairs) -> RCloneSync:
         config_path=tmp_path / "rclone.json",
         endpoints=endpoints,
         pairs=sync_pairs,
-        slack_client=None,
+        slack_client=MagicMock(),  # type: ignore
     )
 
 

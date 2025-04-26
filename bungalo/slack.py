@@ -11,7 +11,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 
 @dataclass
-class MessageState:
+class SlackMessage:
     tid: str
 
 
@@ -70,18 +70,24 @@ class SlackClient:
         if self._socket:
             await self._socket.close()
 
-    async def create_status(self, text: str) -> MessageState:
+    async def create_status(
+        self, text: str, parent_ts: SlackMessage | None = None
+    ) -> SlackMessage:
         """
         Post a message, can be used either for status reporting or threading
         """
         assert self._web
-        resp = await self._web.chat_postMessage(channel=self.channel_id, text=text)
+        resp = await self._web.chat_postMessage(
+            channel=self.channel_id,
+            text=text,
+            thread_ts=parent_ts.tid if parent_ts else None,
+        )
         thread_id = resp["ts"]
         if not isinstance(thread_id, str):
             raise ValueError("Slack returned a non-string thread ID")
-        return MessageState(tid=thread_id)
+        return SlackMessage(tid=thread_id)
 
-    async def update_status(self, status_ts: MessageState, new_text: str) -> None:
+    async def update_status(self, status_ts: SlackMessage, new_text: str) -> None:
         """
         Replace the contents of the message identified by `status_ts`.
         Allows for updating status messages (e.g. progress 0 % → 100 %).
@@ -95,7 +101,7 @@ class SlackClient:
 
     async def post_periodic_updates(
         self,
-        parent_ts: MessageState,
+        parent_ts: SlackMessage,
         messages: list[str],
         every: float = 10.0,
         *,
@@ -127,7 +133,7 @@ class SlackClient:
     @asynccontextmanager
     async def listen_for_replies(
         self,
-        parent_ts: MessageState,
+        parent_ts: SlackMessage,
         *,
         timeout: float | None = None,
         user_filter: set[str] | None = None,
