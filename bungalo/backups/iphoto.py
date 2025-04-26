@@ -187,13 +187,14 @@ class iPhotoSync:
                 LOGGER.info(
                     f"Progress: {processed} / {total_photos} photos processed ({(processed / total_photos) * 100:.1f}%)"
                 )
+                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 await self.slack_client.update_status(
                     update_status,
-                    f"Progress: {processed} / {total_photos} photos processed ({(processed / total_photos) * 100:.1f}%)",
+                    f"[{current_time}] Progress: {processed} / {total_photos} photos processed ({(processed / total_photos) * 100:.1f}%)",
                 )
 
             # Wait a bit before checking again so we don't get rate limited
-            await asyncio.sleep(60)
+            await asyncio.sleep(30)
 
         await self.slack_client.update_status(
             update_status,
