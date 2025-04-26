@@ -55,6 +55,12 @@ The `SSHManager` manages a local bungalo ssh credential that we place into the b
 
 To configure the server behavior, add a config file to: `~/.bungalo/config.toml`. See `config.example.toml` for the expected format.
 
+### Slack Integration
+
+We ping Slack after successful syncs, when there are power failures, etc. We also use channels as the IO interface for receiving 2FA codes when we need to get additional permission from the user.
+
+The `slack_manifest.json` captures the current configuration of our private slack app.
+
 ## Future Work
 
 - Unifi devices don't support wake-on-lan, so once they're shutdown there's no way to remotely start them back up. We'll have to combine it with a remotely controllable Power Distribution Unit if we want to add the restart behavior.

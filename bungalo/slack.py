@@ -3,19 +3,48 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, cast
 
+from slack_sdk.errors import SlackApiError
 from slack_sdk.socket_mode.aiohttp import SocketModeClient
 from slack_sdk.socket_mode.async_listeners import AsyncSocketModeRequestListener
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.web.async_client import AsyncWebClient
 
+from bungalo.logger import LOGGER
+
 
 @dataclass
 class SlackMessage:
     tid: str
+    command_errored: bool = False
 
 
-@dataclass(slots=True, kw_only=True)
+class MessageQueue:
+    """
+    A simple queue interface for receiving Slack messages.
+    Provides a blocking .next() method to get the next message.
+    """
+
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    async def next(self, timeout: float | None = None) -> dict[str, Any]:
+        """
+        Get the next message from the queue.
+
+        :raises asyncio.TimeoutError: If no message is received within the timeout
+        :return: The next message
+        """
+        return await asyncio.wait_for(
+            self.queue.get(),
+            timeout=timeout,
+        )
+
+    def _put(self, message: dict[str, Any]) -> None:
+        """Internal method to add messages to the queue."""
+        self.queue.put_nowait(message)
+
+
 class SlackClient:
     """
     Async helper for long-running Slack interactions that need to:
@@ -45,116 +74,145 @@ class SlackClient:
     destination channel (could be a DM id)
     """
 
-    default_reply_timeout: float = 60.0
+    _web: AsyncWebClient
 
-    _web: AsyncWebClient | None = None
-    _socket: SocketModeClient | None = None
-    _running: asyncio.Event = asyncio.Event()
+    def __init__(
+        self,
+        *,
+        bot_token: str,
+        app_token: str,
+        channel_id: str,
+    ):
+        self.bot_token = bot_token
+        self.app_token = app_token
+        self.channel_id = channel_id
 
-    async def __aenter__(self) -> "SlackClient":
         self._web = AsyncWebClient(token=self.bot_token)
-        self._socket = SocketModeClient(
-            app_token=self.app_token,
-            web_client=self._web,
-        )
-        # ensure events are ACKed automatically
-        self._socket.socket_mode_request_listeners.append(
-            cast(AsyncSocketModeRequestListener, self._auto_ack)
-        )
-        await self._socket.connect()
-        self._running.set()
-        return self
-
-    async def __aexit__(self, *_exc):
-        self._running.clear()
-        if self._socket:
-            await self._socket.close()
+        self._channel_cache: dict[str, str | None] = {}
 
     async def create_status(
         self, text: str, parent_ts: SlackMessage | None = None
     ) -> SlackMessage:
         """
-        Post a message, can be used either for status reporting or threading
+        Post a message, can be used either for status reporting or threading.
+        If Slack API call fails, returns a mock message with command_errored=True.
         """
-        assert self._web
-        resp = await self._web.chat_postMessage(
-            channel=self.channel_id,
-            text=text,
-            thread_ts=parent_ts.tid if parent_ts else None,
-        )
-        thread_id = resp["ts"]
-        if not isinstance(thread_id, str):
-            raise ValueError("Slack returned a non-string thread ID")
-        return SlackMessage(tid=thread_id)
+        try:
+            resp = await self._web.chat_postMessage(
+                channel=await self._get_channel_id(),
+                text=text,
+                thread_ts=(
+                    parent_ts.tid
+                    if parent_ts and not parent_ts.command_errored
+                    else None
+                ),
+            )
+            thread_id = resp["ts"]
+            if not isinstance(thread_id, str):
+                raise ValueError("Slack returned a non-string thread ID")
+            return SlackMessage(tid=thread_id, command_errored=False)
+        except SlackApiError as e:
+            LOGGER.error(f"Failed to create Slack status message: {e}")
+            return SlackMessage(tid="error", command_errored=True)
 
     async def update_status(self, status_ts: SlackMessage, new_text: str) -> None:
         """
         Replace the contents of the message identified by `status_ts`.
         Allows for updating status messages (e.g. progress 0 % → 100 %).
+        No-ops if the original message had an error.
         """
-        assert self._web
-        await self._web.chat_update(
-            channel=self.channel_id,
-            ts=status_ts.tid,
-            text=new_text,
-        )
+        if status_ts.command_errored:
+            LOGGER.error("Skipping status update for previously failed Slack message")
+            return
+
+        try:
+            await self._web.chat_update(
+                channel=await self._get_channel_id(),
+                ts=status_ts.tid,
+                text=new_text,
+            )
+        except SlackApiError as e:
+            LOGGER.error(f"Failed to update Slack status message: {e}")
 
     @asynccontextmanager
     async def listen_for_replies(
         self,
         parent_ts: SlackMessage,
         *,
-        timeout: float | None = None,
         user_filter: set[str] | None = None,
-    ) -> AsyncGenerator[AsyncGenerator[dict[str, Any], None], None]:
+    ) -> AsyncGenerator[MessageQueue, None]:
         """
+        Listen for replies in a thread.
+
+        Usage:
+        ```python
+        async with client.listen_for_replies(thread_ts) as queue:
+            message = await queue.next()
         ```
-        async with mgr.listen_for_replies(thread_ts) as replies:
-            async for event in replies:
-                ...
-        ```
-        Yields an *async generator* of raw Slack `message` events that match:
-        • `thread_ts == parent_ts`
-        • optional `user_filter`
-        Stops when `timeout` elapses (relative) or the surrounding context exits.
+
+        If the parent message had an error, yields an empty queue that will timeout.
+
+        :param parent_ts: Thread to listen to
+        :param timeout: Maximum time to wait for each message
+        :param user_filter: Optional set of user IDs to filter messages by
+        :return: A MessageQueue that yields messages matching the criteria
+        :raises asyncio.TimeoutError: If no message is received within the timeout
         """
-        assert self._socket
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-
-        async def _push(client: SocketModeClient, req: SocketModeRequest) -> None:
-            if req.type != "events_api":
-                return
-            evt = req.payload.get("event", {})
-            if (
-                evt.get("type") == "message"
-                and evt.get("thread_ts") == parent_ts.tid
-                and evt.get("subtype") is None  # ignore edits, bot_msgs, etc.
-                and (user_filter is None or evt.get("user") in user_filter)
-            ):
-                queue.put_nowait(evt)
-
-        self._socket.socket_mode_request_listeners.append(
-            cast(AsyncSocketModeRequestListener, _push)
-        )
-
-        async def _stream() -> AsyncGenerator[dict[str, Any], None]:
-            while self._running.is_set():
-                try:
-                    nxt = await asyncio.wait_for(
-                        queue.get(),
-                        timeout=timeout or self.default_reply_timeout,
-                    )
-                except asyncio.TimeoutError:
-                    break
-                yield nxt
+        if parent_ts.command_errored:
+            LOGGER.error("Skipping reply listener for previously failed Slack message")
+            queue = MessageQueue()
+            yield queue
+            return
 
         try:
-            yield _stream()
+            async with self.use_socket() as slack_socket:
+                queue = MessageQueue()
+
+                async def _push(
+                    client: SocketModeClient, req: SocketModeRequest
+                ) -> None:
+                    LOGGER.info(f"Received Slack event: {req.type} {req.payload}")
+                    if req.type != "events_api":
+                        return
+                    evt = req.payload.get("event", {})
+                    if (
+                        evt.get("type") == "message"
+                        and evt.get("thread_ts") == parent_ts.tid
+                        and evt.get("subtype") is None  # ignore edits, bot_msgs, etc.
+                        and (user_filter is None or evt.get("user") in user_filter)
+                    ):
+                        queue._put(evt)
+
+                slack_socket.socket_mode_request_listeners.append(
+                    cast(AsyncSocketModeRequestListener, _push)
+                )
+
+                try:
+                    yield queue
+                finally:
+                    slack_socket.socket_mode_request_listeners.remove(
+                        cast(AsyncSocketModeRequestListener, _push)
+                    )
+        except SlackApiError as e:
+            LOGGER.error(f"Failed to establish Slack socket connection: {e}")
+            queue = MessageQueue()
+            yield queue
+
+    @asynccontextmanager
+    async def use_socket(self):
+        slack_socket = SocketModeClient(
+            app_token=self.app_token,
+            web_client=self._web,
+        )
+        # ensure events are ACKed automatically
+        slack_socket.socket_mode_request_listeners.append(
+            cast(AsyncSocketModeRequestListener, self._auto_ack)
+        )
+        await slack_socket.connect()
+        try:
+            yield slack_socket
         finally:
-            # remove the local listener
-            self._socket.socket_mode_request_listeners.remove(
-                cast(AsyncSocketModeRequestListener, _push)
-            )
+            await slack_socket.close()
 
     @staticmethod
     async def _auto_ack(client: SocketModeClient, req: SocketModeRequest) -> None:
@@ -166,3 +224,29 @@ class SlackClient:
             await client.send_socket_mode_response(
                 SocketModeResponse(envelope_id=req.envelope_id)
             )
+
+    async def _get_channel_id(self):
+        return (
+            self.channel_id
+            if self.channel_id.startswith("C")
+            else await self._channel_id_from_name(self.channel_id.lstrip("#"))
+        )
+
+    async def _channel_id_from_name(self, name: str) -> str:
+        # requires channels:read
+        if name in self._channel_cache:
+            cached_channel = self._channel_cache[name]
+            if cached_channel is None:
+                raise ValueError(f"Channel #{name} not found or bot not invited")
+            return cached_channel
+
+        responses = await self._web.conversations_list(limit=1000)
+        channels = responses["channels"]
+        if channels is None:
+            raise ValueError("Failed to fetch channels")
+        for ch in channels:
+            if ch["name"] == name:
+                self._channel_cache[name] = ch["id"]
+                return ch["id"]
+        self._channel_cache[name] = None
+        raise ValueError(f"Channel #{name} not found or bot not invited")

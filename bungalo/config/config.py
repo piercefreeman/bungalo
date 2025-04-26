@@ -1,7 +1,7 @@
 from datetime import timedelta
 from typing import Sequence
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint
@@ -28,7 +28,6 @@ class iPhotoBackupConfig(BaseSettings):
     username: str
     password: str
     client_id: str | None = None
-    album_name: str = "All Photos"
     photo_size: str = "original"
 
     # For the time being we only support NAS output. From there we use
@@ -60,6 +59,26 @@ class SlackConfig(BaseSettings):
     app_token: str
     bot_token: str
     channel: str
+
+    @field_validator("channel")
+    @classmethod
+    def validate_channel_format(cls, channel: str) -> str:
+        # Check for hashtag prefix
+        if channel.startswith("#"):
+            return channel
+
+        # Check for Slack conversation ID format
+        if (
+            len(channel) >= 9
+            and channel[0] in ["C", "G", "D"]
+            and channel[1:].isalnum()
+        ):
+            return channel
+
+        raise ValueError(
+            "Channel must either start with '#' or be a valid Slack conversation ID "
+            "(starting with C, G, or D followed by alphanumeric characters)"
+        )
 
 
 class BungaloConfig(BaseSettings):
