@@ -54,7 +54,7 @@ class iPhotoSync:
         output_path: Path,
         slack_client: SlackClient,
         cookie_path: Path,
-        concurrency: int = 10,
+        concurrency: int = 4,
     ) -> None:
         """
         Initialize the iPhoto sync engine.
@@ -64,7 +64,10 @@ class iPhotoSync:
         :param client_id: Client identifier for iCloud API
         :param photo_size: Size/quality of photos to download (e.g., "original")
         :param output_path: Base directory where photos will be saved
-        :param concurrency: Number of concurrent download operations
+        :param concurrency: Number of concurrent download operations. We've observed
+            that higher numbers of workers here will saturate the network connection
+            and DNS resolution layer so slack requests time out. 4 seems workable.
+
         """
         self.username = username
         self.password = password
@@ -171,7 +174,7 @@ class iPhotoSync:
             f"Starting iPhoto sync of {total_photos} photos..."
         )
         update_status = await self.slack_client.create_status(
-            "Progress: 0 / {total_photos} photos processed",
+            f"Progress: 0 / {total_photos} photos processed",
             parent_ts=core_status,
         )
 

@@ -94,7 +94,7 @@ class SlackClient:
         Post a message, can be used either for status reporting or threading
         """
         resp = await self._web.chat_postMessage(
-            channel=self.channel_id,
+            channel=await self._get_channel_id(),
             text=text,
             thread_ts=parent_ts.tid if parent_ts else None,
         )
@@ -109,7 +109,7 @@ class SlackClient:
         Allows for updating status messages (e.g. progress 0 % → 100 %).
         """
         await self._web.chat_update(
-            channel=self.channel_id,
+            channel=await self._get_channel_id(),
             ts=status_ts.tid,
             text=new_text,
         )
@@ -189,3 +189,21 @@ class SlackClient:
             await client.send_socket_mode_response(
                 SocketModeResponse(envelope_id=req.envelope_id)
             )
+
+    async def _get_channel_id(self):
+        return (
+            self.channel_id
+            if self.channel_id.startswith("C")
+            else await self._channel_id_from_name(self.channel_id.lstrip("#"))
+        )
+
+    async def _channel_id_from_name(self, name: str) -> str:
+        # requires channels:read
+        responses = await self._web.conversations_list(limit=1000)
+        channels = responses["channels"]
+        if channels is None:
+            raise ValueError("Failed to fetch channels")
+        for ch in channels:
+            if ch["name"] == name:
+                return ch["id"]
+        raise ValueError(f"Channel #{name} not found or bot not invited")
