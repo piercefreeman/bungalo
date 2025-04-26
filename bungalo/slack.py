@@ -101,9 +101,11 @@ class SlackClient:
             resp = await self._web.chat_postMessage(
                 channel=await self._get_channel_id(),
                 text=text,
-                thread_ts=parent_ts.tid
-                if parent_ts and not parent_ts.command_errored
-                else None,
+                thread_ts=(
+                    parent_ts.tid
+                    if parent_ts and not parent_ts.command_errored
+                    else None
+                ),
             )
             thread_id = resp["ts"]
             if not isinstance(thread_id, str):

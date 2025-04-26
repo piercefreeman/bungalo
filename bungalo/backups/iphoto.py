@@ -184,6 +184,9 @@ class iPhotoSync:
             diff = self._completed_photos - processed
             if diff:
                 processed = self._completed_photos
+                LOGGER.info(
+                    f"Progress: {processed} / {total_photos} photos processed ({(processed / total_photos) * 100:.1f}%)"
+                )
                 await self.slack_client.update_status(
                     update_status,
                     f"Progress: {processed} / {total_photos} photos processed ({(processed / total_photos) * 100:.1f}%)",
