@@ -41,7 +41,6 @@ class MessageQueue:
         self.queue.put_nowait(message)
 
 
-@dataclass(slots=True, kw_only=True)
 class SlackClient:
     """
     Async helper for long-running Slack interactions that need to:
@@ -71,28 +70,20 @@ class SlackClient:
     destination channel (could be a DM id)
     """
 
-    _web: AsyncWebClient | None = None
-    _socket: SocketModeClient | None = None
-    _running: asyncio.Event = asyncio.Event()
+    _web: AsyncWebClient
 
-    async def __aenter__(self) -> "SlackClient":
+    def __init__(
+        self,
+        *,
+        bot_token: str,
+        app_token: str,
+        channel_id: str,
+    ):
+        self.bot_token = bot_token
+        self.app_token = app_token
+        self.channel_id = channel_id
+
         self._web = AsyncWebClient(token=self.bot_token)
-        self._socket = SocketModeClient(
-            app_token=self.app_token,
-            web_client=self._web,
-        )
-        # ensure events are ACKed automatically
-        self._socket.socket_mode_request_listeners.append(
-            cast(AsyncSocketModeRequestListener, self._auto_ack)
-        )
-        await self._socket.connect()
-        self._running.set()
-        return self
-
-    async def __aexit__(self, *_exc):
-        self._running.clear()
-        if self._socket:
-            await self._socket.close()
 
     async def create_status(
         self, text: str, parent_ts: SlackMessage | None = None
@@ -100,7 +91,6 @@ class SlackClient:
         """
         Post a message, can be used either for status reporting or threading
         """
-        assert self._web
         resp = await self._web.chat_postMessage(
             channel=self.channel_id,
             text=text,
@@ -116,7 +106,6 @@ class SlackClient:
         Replace the contents of the message identified by `status_ts`.
         Allows for updating status messages (e.g. progress 0 % → 100 %).
         """
-        assert self._web
         await self._web.chat_update(
             channel=self.channel_id,
             ts=status_ts.tid,
@@ -145,31 +134,47 @@ class SlackClient:
         :return: A MessageQueue that yields messages matching the criteria
         :raises asyncio.TimeoutError: If no message is received within the timeout
         """
-        assert self._socket
-        queue = MessageQueue()
+        async with self.use_socket() as slack_socket:
+            queue = MessageQueue()
 
-        async def _push(client: SocketModeClient, req: SocketModeRequest) -> None:
-            if req.type != "events_api":
-                return
-            evt = req.payload.get("event", {})
-            if (
-                evt.get("type") == "message"
-                and evt.get("thread_ts") == parent_ts.tid
-                and evt.get("subtype") is None  # ignore edits, bot_msgs, etc.
-                and (user_filter is None or evt.get("user") in user_filter)
-            ):
-                queue._put(evt)
+            async def _push(client: SocketModeClient, req: SocketModeRequest) -> None:
+                if req.type != "events_api":
+                    return
+                evt = req.payload.get("event", {})
+                if (
+                    evt.get("type") == "message"
+                    and evt.get("thread_ts") == parent_ts.tid
+                    and evt.get("subtype") is None  # ignore edits, bot_msgs, etc.
+                    and (user_filter is None or evt.get("user") in user_filter)
+                ):
+                    queue._put(evt)
 
-        self._socket.socket_mode_request_listeners.append(
-            cast(AsyncSocketModeRequestListener, _push)
-        )
-
-        try:
-            yield queue
-        finally:
-            self._socket.socket_mode_request_listeners.remove(
+            slack_socket.socket_mode_request_listeners.append(
                 cast(AsyncSocketModeRequestListener, _push)
             )
+
+            try:
+                yield queue
+            finally:
+                slack_socket.socket_mode_request_listeners.remove(
+                    cast(AsyncSocketModeRequestListener, _push)
+                )
+
+    @asynccontextmanager
+    async def use_socket(self):
+        slack_socket = SocketModeClient(
+            app_token=self.app_token,
+            web_client=self._web,
+        )
+        # ensure events are ACKed automatically
+        slack_socket.socket_mode_request_listeners.append(
+            cast(AsyncSocketModeRequestListener, self._auto_ack)
+        )
+        await slack_socket.connect()
+        try:
+            yield slack_socket
+        finally:
+            await slack_socket.close()
 
     @staticmethod
     async def _auto_ack(client: SocketModeClient, req: SocketModeRequest) -> None:
