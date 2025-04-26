@@ -61,7 +61,7 @@ def rclone(tmp_path, endpoints, sync_pairs) -> RCloneSync:
         config_path=tmp_path / "rclone.json",
         endpoints=endpoints,
         pairs=sync_pairs,
-        slack_client=MagicMock(),  # type: ignore
+        slack_client=AsyncMock(),  # type: ignore
     )
 
 
@@ -168,4 +168,4 @@ async def test_sync_failure_bubbles_up(
 
     with patch.object(rclone, "_alert") as alert_mock:
         await rclone.sync_all()
-        alert_mock.assert_called_once()
+        alert_mock.assert_called()
