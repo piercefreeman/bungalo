@@ -46,7 +46,7 @@ def mount_smb(
     temp_dir: tempfile.TemporaryDirectory | None = None
     mount_dir: Path
     if mount_point is None:
-        temp_dir = tempfile.TemporaryDirectory()
+        temp_dir = tempfile.TemporaryDirectory(delete=False)
         mount_dir = Path(temp_dir.name)
     else:
         mount_dir = Path(mount_point)
@@ -94,7 +94,3 @@ def mount_smb(
                 subprocess.run(["umount", str(mount_dir)], check=True)
         except Exception as e:
             CONSOLE.print(f"Warning: Failed to unmount {mount_dir}: {e}")
-
-        # Clean up the temporary directory if we created one
-        if temp_dir:
-            temp_dir.cleanup()

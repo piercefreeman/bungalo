@@ -24,7 +24,6 @@ from bungalo.backups.nas import mount_smb
 from bungalo.config import BungaloConfig
 from bungalo.config.endpoints import NASEndpoint
 from bungalo.constants import DEFAULT_PYICLOUD_COOKIE_PATH
-from bungalo.io import progress_bar
 from bungalo.logger import CONSOLE, LOGGER
 from bungalo.slack import SlackClient
 
@@ -87,6 +86,7 @@ class iPhotoSync:
         Uses asyncio for non-blocking concurrent downloads with a queue system
         to control resource usage.
         """
+        CONSOLE.print("Logging in to iCloud...")
         icloud = await self.icloud_login()
         CONSOLE.print("Getting photo metadata from album...")
         photos = icloud.photos.all
@@ -167,20 +167,32 @@ class iPhotoSync:
 
         :param total_photos: Total number of photos to be processed
         """
-        processed = 0
+        core_status = await self.slack_client.create_status(
+            f"Starting iPhoto sync of {total_photos} photos..."
+        )
+        update_status = await self.slack_client.create_status(
+            "Progress: 0 / {total_photos} photos processed",
+            parent_ts=core_status,
+        )
 
-        with progress_bar(total=total_photos, description="Syncing photos") as (
-            pb,
-            task,
-        ):
+        processed = 0
+        while processed < total_photos:
             # Update progress bar with the new number of completed items
             diff = self._completed_photos - processed
             if diff:
-                pb.update(task, advance=diff)
                 processed = self._completed_photos
+                await self.slack_client.update_status(
+                    update_status,
+                    f"Progress: {processed} / {total_photos} photos processed ({(processed / total_photos) * 100:.1f}%)",
+                )
 
             # Wait a bit before checking again
             await asyncio.sleep(0.5)
+
+        await self.slack_client.update_status(
+            update_status,
+            f"✅ Completed processing all {total_photos} photos!",
+        )
 
     def iter_photos(self, photos: PhotoAlbum) -> Iterator[PhotoContext]:
         """
