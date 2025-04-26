@@ -99,37 +99,6 @@ class SlackClient:
             text=new_text,
         )
 
-    async def post_periodic_updates(
-        self,
-        parent_ts: SlackMessage,
-        messages: list[str],
-        every: float = 10.0,
-        *,
-        cancel_event: asyncio.Event | None = None,
-    ) -> None:
-        """
-        Fire-and-forget coroutine that posts each `messages[i]` into the thread
-        `parent_ts` every *`every`* seconds until either the list is exhausted
-        or `cancel_event` is set.
-        """
-        assert self._web
-        for txt in messages:
-            if cancel_event and cancel_event.is_set():
-                break
-            await self._web.chat_postMessage(
-                channel=self.channel_id,
-                thread_ts=parent_ts.tid,
-                text=txt,
-            )
-            try:
-                await asyncio.wait_for(
-                    cancel_event.wait() if cancel_event else asyncio.sleep(every),
-                    timeout=every,
-                )
-            except asyncio.TimeoutError:
-                # normal path – just sleep elapsed
-                continue
-
     @asynccontextmanager
     async def listen_for_replies(
         self,

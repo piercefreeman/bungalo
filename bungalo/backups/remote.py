@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, IPvAnyAddress, ValidationError, model_val
 
 from bungalo.config.config import BungaloConfig, SyncPair
 from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint
-from bungalo.config.paths import FileLocation
+from bungalo.config.paths import B2Path, FileLocation, FilePath, NASPath
 from bungalo.constants import DEFAULT_RCLONE_CONFIG_FILE
 from bungalo.logger import CONSOLE, LOGGER
 from bungalo.slack import SlackClient, SlackMessage
@@ -77,9 +77,9 @@ class RCloneStatus(BaseModel):
         checks: int
         deleted_dirs: int = Field(validation_alias="deletedDirs")
         deletes: int
-        elapsed_time: int = Field(validation_alias="elapsedTime")
+        elapsed_time: float = Field(validation_alias="elapsedTime")
         errors: int
-        eta: int
+        eta: int | None
         fatal_error: bool = Field(validation_alias="fatalError")
         renames: int
         speed: float
@@ -100,11 +100,15 @@ class RCloneSync:
         endpoints: dict[str, EndpointBase],
         pairs: list[SyncPair],
         slack_client: SlackClient,
+        progress_interval: int = 30,
+        custom_rclone_args: list[str] = [],
     ) -> None:
         self.config_path = config_path
         self.endpoints = endpoints
         self.pairs = pairs
         self.slack_client = slack_client
+        self.progress_interval = progress_interval
+        self.custom_rclone_args = custom_rclone_args
 
     async def write_config(self) -> None:
         config_lines = []
@@ -184,13 +188,23 @@ class RCloneSync:
 
     @contextmanager
     def _location_context(self, location: FileLocation) -> Generator[str, None, None]:
-        endpoint = self.endpoints[location.endpoint_nickname]
+        endpoint = self.endpoints.get(location.endpoint_nickname)
 
         # Handle additional processing necessary to prepare the FileLocation for transfer
         # We previously used this for SMB mounts via mount_smb, but now we just configure
         # directly in rclone.
-
-        yield f"{endpoint.nickname}:{location.full_path}"
+        match location:
+            case NASPath():
+                assert endpoint
+                yield f"{location.endpoint_nickname}:{location.full_path}"
+            case B2Path():
+                assert endpoint
+                yield f"{location.endpoint_nickname}:{location.full_path}"
+            case FilePath():
+                # Does not need an endpoint
+                yield f"{location.full_path}"
+            case _:
+                assert_never(endpoint)
 
     async def _run_sync(self, src: str, dst: str, update_status: SlackMessage) -> None:
         process = await asyncio.create_subprocess_exec(
@@ -201,12 +215,13 @@ class RCloneSync:
             src,
             dst,
             "--stats",
-            "30s",  # emits one stats line every 30 s
+            f"{self.progress_interval}s",  # emits one stats line every X seconds
             "--use-json-log",
             "--log-format",
             "time,level,msg",
             "--stats-log-level",
             "NOTICE",
+            *self.custom_rclone_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -214,7 +229,7 @@ class RCloneSync:
         async def _pipe_reader(name: str, stream: asyncio.StreamReader) -> None:
             async for line in stream:
                 raw_text = line.decode().rstrip()
-                LOGGER.info("%s: %s", name, raw_text)
+                LOGGER.info(f"{name}: {raw_text}")
 
                 # Try to validate the JSON so we can log more specific status updates
                 try:
@@ -222,10 +237,11 @@ class RCloneSync:
                     await self.slack_client.update_status(
                         update_status, f"[{status.time}] {status.msg}"
                     )
-                except ValidationError:
+                except ValidationError as e:
+                    LOGGER.error(f"Failed to parse rclone log line: {raw_text} {e}")
                     await self.slack_client.update_status(
                         update_status,
-                        f"Failed to parse rclone log line: {raw_text}",
+                        f"Failed to parse rclone log line: {raw_text} {e}",
                     )
 
         if not process.stdout or not process.stderr:
