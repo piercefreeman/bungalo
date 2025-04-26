@@ -175,7 +175,6 @@ def test_fully_parameterized_config(config_dict: dict[str, Any]) -> None:
     assert config.iphoto.username == "test_user"
     assert config.iphoto.password == "test_pass"
     assert config.iphoto.client_id == "test_client_id"
-    assert config.iphoto.album_name == "Test Album"
     assert config.iphoto.photo_size == "large"
     assert isinstance(config.iphoto.output, NASPath)
 

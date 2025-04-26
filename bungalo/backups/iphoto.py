@@ -5,6 +5,7 @@ from pathlib import Path
 from queue import Queue
 from shutil import copyfile
 from tempfile import TemporaryDirectory
+from traceback import format_exc
 from typing import Iterator
 
 from foundation.core import identity
@@ -13,6 +14,7 @@ from icloudpd.paths import clean_filename
 from pyicloud_ipd.base import PyiCloudService
 from pyicloud_ipd.exceptions import PyiCloudFailedLoginException
 from pyicloud_ipd.file_match import FileMatchPolicy
+from pyicloud_ipd.item_type import AssetItemType
 from pyicloud_ipd.raw_policy import RawTreatmentPolicy
 from pyicloud_ipd.services.photos import PhotoAlbum, PhotoAsset
 from pyicloud_ipd.version_size import AssetVersionSize
@@ -49,7 +51,6 @@ class iPhotoSync:
         username: str,
         password: str,
         client_id: str | None,
-        album_name: str,
         photo_size: AssetVersionSize,
         output_path: Path,
         slack_client: SlackClient,
@@ -62,7 +63,6 @@ class iPhotoSync:
         :param username: iCloud account username/email
         :param password: iCloud account password
         :param client_id: Client identifier for iCloud API
-        :param album_name: Name of the album to sync
         :param photo_size: Size/quality of photos to download (e.g., "original")
         :param output_path: Base directory where photos will be saved
         :param concurrency: Number of concurrent download operations
@@ -70,7 +70,6 @@ class iPhotoSync:
         self.username = username
         self.password = password
         self.client_id = client_id
-        self.album_name = album_name
         self.photo_size = photo_size
         self.output_path = output_path
         self.concurrency = concurrency
@@ -90,7 +89,7 @@ class iPhotoSync:
         """
         icloud = await self.icloud_login()
         CONSOLE.print("Getting photo metadata from album...")
-        photos = icloud.photos.albums[self.album_name]
+        photos = icloud.photos.all
         CONSOLE.print(f"Found {len(photos)} photos, starting to process metadata...")
 
         # Create a task to populate the queue in background
@@ -195,7 +194,7 @@ class iPhotoSync:
         for photo in photos:
             filename = clean_filename(photo.filename)
 
-            if photo.item_type not in {"image", "movie"}:
+            if photo.item_type not in {AssetItemType.IMAGE, AssetItemType.MOVIE}:
                 CONSOLE.print(
                     f"Skipping {filename}, only downloading photos and videos. "
                     f"(Item type was: {photo.item_type})"
@@ -443,7 +442,6 @@ async def main(config: BungaloConfig) -> None:
                     username=config.iphoto.username,
                     password=config.iphoto.password,
                     client_id=config.iphoto.client_id,
-                    album_name=config.iphoto.album_name,
                     photo_size=AssetVersionSize(config.iphoto.photo_size),
                     slack_client=slack_client,
                     cookie_path=Path(DEFAULT_PYICLOUD_COOKIE_PATH).expanduser(),
@@ -453,6 +451,7 @@ async def main(config: BungaloConfig) -> None:
 
                 await iphoto_sync.sync()
         except Exception as e:
+            CONSOLE.print(f"Error syncing iPhoto library: {e} {format_exc()}")
             await slack_client.create_status(f"Error syncing iPhoto: {e}")
 
         # Run every 24 hours

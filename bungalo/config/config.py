@@ -28,7 +28,6 @@ class iPhotoBackupConfig(BaseSettings):
     username: str
     password: str
     client_id: str | None = None
-    album_name: str = "All Photos"
     photo_size: str = "original"
 
     # For the time being we only support NAS output. From there we use
