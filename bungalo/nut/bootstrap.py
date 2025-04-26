@@ -258,11 +258,11 @@ def run_command(
     """
     Run a command.
 
-    Args:
-        cmd: Command to run as string or list
-        check: Whether to check return code
-        capture_output: Whether to capture output
-        text: Whether to return string output
+    :param cmd: Command to run as string or list
+    :param check: Whether to check return code
+    :param capture_output: Whether to capture output
+    :param text: Whether to return string output
+
     """
     if isinstance(cmd, str):
         cmd = cmd.split()

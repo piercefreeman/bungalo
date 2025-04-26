@@ -1,18 +1,19 @@
 import asyncio
 import contextlib
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from traceback import format_exc
 from typing import Generator, Sequence, assert_never
 
-from pydantic import BaseModel, Field, IPvAnyAddress, model_validator
+from pydantic import BaseModel, Field, IPvAnyAddress, ValidationError, model_validator
 
 from bungalo.config.config import BungaloConfig, SyncPair
 from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint
-from bungalo.config.paths import FileLocation
+from bungalo.config.paths import B2Path, FileLocation, FilePath, NASPath
 from bungalo.constants import DEFAULT_RCLONE_CONFIG_FILE
 from bungalo.logger import CONSOLE, LOGGER
-from bungalo.slack import SlackClient
+from bungalo.slack import SlackClient, SlackMessage
 
 
 class RemoteBase(BaseModel):
@@ -66,18 +67,48 @@ class EncryptedRemote(RemoteBase):
     directory_name_encryption: str = "off"
 
 
+class RCloneStatus(BaseModel):
+    """
+    Output of rclone when run with `--use-json-log`.
+    """
+
+    class Stats(BaseModel):
+        transferred_bytes: int = Field(validation_alias="bytes")
+        checks: int
+        deleted_dirs: int = Field(validation_alias="deletedDirs")
+        deletes: int
+        elapsed_time: float = Field(validation_alias="elapsedTime")
+        errors: int
+        eta: int | None
+        fatal_error: bool = Field(validation_alias="fatalError")
+        renames: int
+        speed: float
+        total_bytes: int = Field(validation_alias="totalBytes")
+        total_checks: int = Field(validation_alias="totalChecks")
+        total_transfers: int = Field(validation_alias="totalTransfers")
+
+    level: str
+    msg: str
+    time: datetime
+    stats: Stats
+
+
 class RCloneSync:
     def __init__(
         self,
         config_path: Path,
         endpoints: dict[str, EndpointBase],
         pairs: list[SyncPair],
-        slack_client: SlackClient | None = None,
+        slack_client: SlackClient,
+        progress_interval: int = 30,
+        custom_rclone_args: list[str] = [],
     ) -> None:
         self.config_path = config_path
         self.endpoints = endpoints
         self.pairs = pairs
         self.slack_client = slack_client
+        self.progress_interval = progress_interval
+        self.custom_rclone_args = custom_rclone_args
 
     async def write_config(self) -> None:
         config_lines = []
@@ -135,8 +166,14 @@ class RCloneSync:
         for pair in self.pairs:
             try:
                 with self._pair_context(pair) as (resolved_src, resolved_dst):
-                    CONSOLE.print(f"Syncing {resolved_src} → {resolved_dst}")
-                    await self._run_sync(resolved_src, resolved_dst)
+                    core_status = await self._alert(
+                        f"Syncing {resolved_src} → {resolved_dst}"
+                    )
+                    update_status = await self.slack_client.create_status(
+                        "Progress Report...",
+                        parent_ts=core_status,
+                    )
+                    await self._run_sync(resolved_src, resolved_dst, update_status)
                     await self._alert(f"Synced {resolved_src} → {resolved_dst}")
             except Exception as exc:
                 CONSOLE.print(f"Traceback: {format_exc()}")
@@ -151,15 +188,25 @@ class RCloneSync:
 
     @contextmanager
     def _location_context(self, location: FileLocation) -> Generator[str, None, None]:
-        endpoint = self.endpoints[location.endpoint_nickname]
+        endpoint = self.endpoints.get(location.endpoint_nickname)
 
         # Handle additional processing necessary to prepare the FileLocation for transfer
         # We previously used this for SMB mounts via mount_smb, but now we just configure
         # directly in rclone.
+        match location:
+            case NASPath():
+                assert endpoint
+                yield f"{location.endpoint_nickname}:{location.full_path}"
+            case B2Path():
+                assert endpoint
+                yield f"{location.endpoint_nickname}:{location.full_path}"
+            case FilePath():
+                # Does not need an endpoint
+                yield f"{location.full_path}"
+            case _:
+                assert_never(endpoint)
 
-        yield f"{endpoint.nickname}:{location.full_path}"
-
-    async def _run_sync(self, src: str, dst: str) -> None:
+    async def _run_sync(self, src: str, dst: str, update_status: SlackMessage) -> None:
         process = await asyncio.create_subprocess_exec(
             "rclone",
             "sync",
@@ -168,22 +215,34 @@ class RCloneSync:
             src,
             dst,
             "--stats",
-            "30s",  # emits one stats line every 30 s
+            f"{self.progress_interval}s",  # emits one stats line every X seconds
             "--use-json-log",
             "--log-format",
             "time,level,msg",
             "--stats-log-level",
             "NOTICE",
+            *self.custom_rclone_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
 
         async def _pipe_reader(name: str, stream: asyncio.StreamReader) -> None:
             async for line in stream:
-                # TODO: Parse the JSON log output and write status updates within
-                # a slack thread (use a single contextmanager to wrap the slack
-                # thread context)
-                LOGGER.info("%s: %s", name, line.decode().rstrip())
+                raw_text = line.decode().rstrip()
+                LOGGER.info(f"{name}: {raw_text}")
+
+                # Try to validate the JSON so we can log more specific status updates
+                try:
+                    status = RCloneStatus.model_validate_json(raw_text)
+                    await self.slack_client.update_status(
+                        update_status, f"[{status.time}] {status.msg}"
+                    )
+                except ValidationError as e:
+                    LOGGER.error(f"Failed to parse rclone log line: {raw_text} {e}")
+                    await self.slack_client.update_status(
+                        update_status,
+                        f"Failed to parse rclone log line: {raw_text} {e}",
+                    )
 
         if not process.stdout or not process.stderr:
             raise RuntimeError("rclone failed to start")
@@ -203,10 +262,9 @@ class RCloneSync:
         if returncode:
             raise RuntimeError(f"rclone exited with code {returncode}")
 
-    async def _alert(self, message: str) -> None:
+    async def _alert(self, message: str) -> SlackMessage:
         CONSOLE.print(message)
-        if self.slack_client:
-            await self.slack_client.send_message(message)
+        return await self.slack_client.create_status(message)
 
     async def _encrypt_key(self, key: str) -> str:
         """
@@ -257,10 +315,10 @@ async def main(config: BungaloConfig) -> None:
         config_path=Path(DEFAULT_RCLONE_CONFIG_FILE).expanduser(),
         endpoints=endpoints_by_nickname,
         pairs=sync_pairs,
-        slack_client=(
-            SlackClient(config.root.slack_webhook_url)
-            if config.root.slack_webhook_url
-            else None
+        slack_client=SlackClient(
+            app_token=config.slack.app_token,
+            bot_token=config.slack.bot_token,
+            channel_id=config.slack.channel,
         ),
     )
     await rclone_sync.write_config()
@@ -271,5 +329,7 @@ async def main(config: BungaloConfig) -> None:
         except Exception as exc:
             CONSOLE.print(f"Sync failed: {exc}")
             if rclone_sync.slack_client:
-                await rclone_sync.slack_client.send_message(f"Sync round failed: {exc}")
-        await asyncio.sleep(6 * 60 * 60)
+                await rclone_sync.slack_client.create_status(
+                    f"Sync round failed: {exc}"
+                )
+        await asyncio.sleep(config.backups.interval.total_seconds())

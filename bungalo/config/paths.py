@@ -96,8 +96,35 @@ class NASPath(PathBase):
         return f"nas:{self.endpoint_nickname}://{self.drive_name}/{self.path}"
 
 
+class FilePath(PathBase):
+    path: str
+
+    @staticmethod
+    def _from_uri(v: str) -> dict[str, str]:
+        scheme, endpoint_nickname, first_path, second_path = (
+            FilePath.parse_endpoint_uri(v)
+        )
+        if scheme != "file":
+            raise ValueError("file URI must be file:local://path")
+        if endpoint_nickname != "local":
+            raise ValueError("file URI must use 'local' as endpoint")
+
+        full_path = first_path
+        if second_path:
+            full_path = f"{first_path}/{second_path}"
+
+        return {
+            "endpoint_nickname": endpoint_nickname,
+            "path": full_path,
+            "full_path": full_path,
+        }
+
+    def __str__(self) -> str:
+        return f"file:{self.endpoint_nickname}://{self.path}"
+
+
 def _parse_file_location(v):
-    if isinstance(v, (B2Path, NASPath)):
+    if isinstance(v, (B2Path, NASPath, FilePath)):
         return v
     if not isinstance(v, str):
         raise TypeError("FileLocation expects a URI string")
@@ -110,7 +137,11 @@ def _parse_file_location(v):
         return B2Path._from_uri(v)
     if scheme == "nas":
         return NASPath._from_uri(v)
+    if scheme == "file":
+        return FilePath._from_uri(v)
     raise ValueError(f"Unsupported URI scheme '{scheme}'")
 
 
-FileLocation = Annotated[B2Path | NASPath, BeforeValidator(_parse_file_location)]
+FileLocation = Annotated[
+    B2Path | NASPath | FilePath, BeforeValidator(_parse_file_location)
+]

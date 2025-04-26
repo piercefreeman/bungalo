@@ -28,7 +28,11 @@ async def main(config: BungaloConfig):
             for client in config.nut.managed_hardware
         ]
     )
-    slack_client = SlackClient(config.root.slack_webhook_url)
+    slack_client = SlackClient(
+        app_token=config.slack.app_token,
+        bot_token=config.slack.bot_token,
+        channel_id=config.slack.channel,
+    )
 
     await asyncio.gather(
         poll_task(client_manager, slack_client, config),
@@ -54,7 +58,7 @@ async def poll_task(
 
         # Send a slack message
         if not clients_shutdown and status.statuses.is_on_battery():
-            await slack_client.send_message(f"Battery at {status.battery_charge}%")
+            await slack_client.create_status(f"Battery at {status.battery_charge}%")
 
         if (
             status.battery_charge <= config.nut.shutdown_threshold
@@ -66,7 +70,7 @@ async def poll_task(
                 "Shutting down client machines..."
             )
             await client_manager.shutdown_clients()
-            await slack_client.send_message(
+            await slack_client.create_status(
                 f"Battery at {status.battery_charge}% - below shutdown threshold. Shutting down client machines..."
             )
             clients_shutdown = True
@@ -90,7 +94,7 @@ async def healthcheck_task(
         results = await client_manager.healthcheck()
         failed_clients = [client for client, status in results.items() if not status]
         if failed_clients:
-            await slack_client.send_message(
+            await slack_client.create_status(
                 f"Failed to connect to {', '.join(failed_clients)}"
             )
         await asyncio.sleep(interval)

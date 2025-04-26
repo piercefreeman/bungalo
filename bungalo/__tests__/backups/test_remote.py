@@ -1,3 +1,5 @@
+import os
+import random
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -61,7 +63,7 @@ def rclone(tmp_path, endpoints, sync_pairs) -> RCloneSync:
         config_path=tmp_path / "rclone.json",
         endpoints=endpoints,
         pairs=sync_pairs,
-        slack_client=None,
+        slack_client=AsyncMock(),  # type: ignore
     )
 
 
@@ -168,4 +170,88 @@ async def test_sync_failure_bubbles_up(
 
     with patch.object(rclone, "_alert") as alert_mock:
         await rclone.sync_all()
-        alert_mock.assert_called_once()
+        alert_mock.assert_called()
+
+
+# --------------------------------------------------------------------------- #
+#  Integration Tests
+# --------------------------------------------------------------------------- #
+
+
+def _create_large_test_file(path: Path, size_mb: int = 5) -> None:
+    """
+    Create a test file of specified size in megabytes.
+
+    :param path: Path where to create the file
+    :param size_mb: Size of the file in megabytes
+
+    """
+    # Create a buffer of 1MB to write repeatedly
+    chunk_size = 1024 * 1024  # 1MB
+    chunk = bytes([random.randint(0, 255) for _ in range(chunk_size)])
+
+    with open(path, "wb") as f:
+        for _ in range(size_mb):
+            f.write(chunk)
+
+
+@pytest.mark.asyncio
+async def test_local_file_sync(tmp_path: Path) -> None:
+    """
+    Test a real sync of a local file to a local file, to ensure our calls to rclone
+    validate and we can parse the log output.
+
+    """
+    # Create source and destination directories
+    source_dir = tmp_path / "source"
+    dest_dir = tmp_path / "dest"
+    source_dir.mkdir()
+    dest_dir.mkdir()
+
+    # Create a large test file (5MB)
+    test_file = source_dir / "large_test.bin"
+    _create_large_test_file(test_file)
+
+    # Create some additional test files for structure testing
+    test_subdir = source_dir / "subdir"
+    test_subdir.mkdir()
+    (test_subdir / "nested.txt").write_text("Nested content")
+    (source_dir / "small_test.txt").write_text("Hello, World!")
+
+    # Create sync pairs for local directories
+    sync_pairs = [
+        SyncPair(
+            src=f"file:local://{source_dir}",  # type: ignore
+            dst=f"file:local://{dest_dir}",  # type: ignore
+        )
+    ]
+
+    # Mock the slack client
+    mock_slack = AsyncMock()
+
+    # Create RCloneSync instance
+    rclone = RCloneSync(
+        config_path=tmp_path / "rclone.json",
+        endpoints={},  # No endpoints needed for local sync
+        pairs=sync_pairs,
+        slack_client=mock_slack,
+        progress_interval=1,
+    )
+
+    # Run the sync
+    await rclone.write_config()
+    await rclone.sync_all()
+
+    # Verify the files were actually copied
+    assert (dest_dir / "large_test.bin").exists()
+    assert os.path.getsize(dest_dir / "large_test.bin") == os.path.getsize(test_file)
+    assert (dest_dir / "small_test.txt").exists()
+    assert (dest_dir / "small_test.txt").read_text() == "Hello, World!"
+    assert (dest_dir / "subdir" / "nested.txt").exists()
+    assert (dest_dir / "subdir" / "nested.txt").read_text() == "Nested content"
+
+    # Verify slack was updated with some log output
+    mock_slack.create_status.assert_called()
+    assert any(
+        "5.000 MiB" in message[1] for message in mock_slack.update_status.call_args
+    )
