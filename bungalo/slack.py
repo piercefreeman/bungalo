@@ -9,6 +9,8 @@ from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.web.async_client import AsyncWebClient
 
+from bungalo.logger import LOGGER
+
 
 @dataclass
 class SlackMessage:
@@ -138,6 +140,7 @@ class SlackClient:
             queue = MessageQueue()
 
             async def _push(client: SocketModeClient, req: SocketModeRequest) -> None:
+                LOGGER.info(f"Received Slack event: {req.type} {req.payload}")
                 if req.type != "events_api":
                     return
                 evt = req.payload.get("event", {})
