@@ -206,7 +206,7 @@ class RCloneSync:
     async def _alert(self, message: str) -> None:
         CONSOLE.print(message)
         if self.slack_client:
-            await self.slack_client.send_message(message)
+            await self.slack_client.create_status(message)
 
     async def _encrypt_key(self, key: str) -> str:
         """
@@ -257,10 +257,10 @@ async def main(config: BungaloConfig) -> None:
         config_path=Path(DEFAULT_RCLONE_CONFIG_FILE).expanduser(),
         endpoints=endpoints_by_nickname,
         pairs=sync_pairs,
-        slack_client=(
-            SlackClient(config.root.slack_webhook_url)
-            if config.root.slack_webhook_url
-            else None
+        slack_client=SlackClient(
+            app_token=config.slack.app_token,
+            bot_token=config.slack.bot_token,
+            channel_id=config.slack.channel,
         ),
     )
     await rclone_sync.write_config()
@@ -271,5 +271,7 @@ async def main(config: BungaloConfig) -> None:
         except Exception as exc:
             CONSOLE.print(f"Sync failed: {exc}")
             if rclone_sync.slack_client:
-                await rclone_sync.slack_client.send_message(f"Sync round failed: {exc}")
-        await asyncio.sleep(6 * 60 * 60)
+                await rclone_sync.slack_client.create_status(
+                    f"Sync round failed: {exc}"
+                )
+        await asyncio.sleep(config.backups.interval.total_seconds())

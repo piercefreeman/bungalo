@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Sequence
 
 from pydantic import BaseModel, Field, model_validator
@@ -8,7 +9,7 @@ from bungalo.config.paths import B2Path, FileLocation, NASPath
 
 
 class RootConfig(BaseSettings):
-    slack_webhook_url: str
+    pass
 
 
 class ManagedHardware(BaseSettings):
@@ -34,6 +35,8 @@ class iPhotoBackupConfig(BaseSettings):
     # rclone to sync to B2 or another remote location.
     output: NASPath
 
+    interval: timedelta = timedelta(hours=24)
+
 
 class SyncPair(BaseSettings):
     src: FileLocation
@@ -42,6 +45,7 @@ class SyncPair(BaseSettings):
 
 class RemoteBackupConfig(BaseSettings):
     sync: list[SyncPair]
+    interval: timedelta = timedelta(hours=6)
 
 
 class EndpointConfig(BaseSettings):
@@ -52,9 +56,18 @@ class EndpointConfig(BaseSettings):
         return self.b2 + self.nas
 
 
+class SlackConfig(BaseSettings):
+    app_token: str
+    bot_token: str
+    channel: str
+
+
 class BungaloConfig(BaseSettings):
     # General ungrouped configuration
-    root: RootConfig
+    root: RootConfig = RootConfig()
+
+    # Notifications
+    slack: SlackConfig
 
     # Power management
     nut: NutConfig = Field(default_factory=NutConfig)

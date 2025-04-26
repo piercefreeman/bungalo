@@ -358,7 +358,11 @@ async def main(config: BungaloConfig) -> None:
         CONSOLE.print("iPhoto backup not configured, skipping")
         return
 
-    slack_client = SlackClient(config.root.slack_webhook_url)
+    slack_client = SlackClient(
+        app_token=config.slack.app_token,
+        bot_token=config.slack.bot_token,
+        channel_id=config.slack.channel,
+    )
 
     endpoint = next(
         (
@@ -395,7 +399,7 @@ async def main(config: BungaloConfig) -> None:
 
                 await iphoto_sync.sync()
         except Exception as e:
-            await slack_client.send_message(f"Error syncing iPhoto: {e}")
+            await slack_client.create_status(f"Error syncing iPhoto: {e}")
 
-    # Run every 24 hours
-    await asyncio.sleep(24 * 60 * 60)
+        # Run every 24 hours
+        await asyncio.sleep(config.iphoto.interval.total_seconds())

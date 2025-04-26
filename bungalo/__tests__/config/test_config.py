@@ -9,7 +9,7 @@ from bungalo.config.config import (
     ManagedHardware,
     NutConfig,
     RemoteBackupConfig,
-    RootConfig,
+    SlackConfig,
     SyncPair,
     iPhotoBackupConfig,
 )
@@ -33,8 +33,10 @@ def managed_hardware_dict() -> dict[str, str]:
 @pytest.fixture
 def config_dict() -> dict[str, Any]:
     return {
-        "root": {
-            "slack_webhook_url": "https://hooks.slack.com/test",
+        "slack": {
+            "app_token": "test_app_token",
+            "bot_token": "test_bot_token",
+            "channel": "test_channel",
         },
         "nut": {
             "shutdown_threshold": 15,
@@ -155,8 +157,10 @@ def test_fully_parameterized_config(config_dict: dict[str, Any]) -> None:
     config = BungaloConfig.model_validate(config_dict)
 
     # Test root config
-    assert isinstance(config.root, RootConfig)
-    assert config.root.slack_webhook_url == "https://hooks.slack.com/test"
+    assert isinstance(config.slack, SlackConfig)
+    assert config.slack.channel == "test_channel"
+    assert config.slack.app_token == "test_app_token"
+    assert config.slack.bot_token == "test_bot_token"
 
     # Test nut config
     assert isinstance(config.nut, NutConfig)
