@@ -189,8 +189,8 @@ class iPhotoSync:
                     f"Progress: {processed} / {total_photos} photos processed ({(processed / total_photos) * 100:.1f}%)",
                 )
 
-            # Wait a bit before checking again
-            await asyncio.sleep(0.5)
+            # Wait a bit before checking again so we don't get rate limited
+            await asyncio.sleep(60)
 
         await self.slack_client.update_status(
             update_status,
