@@ -21,6 +21,7 @@ from tzlocal import get_localzone
 from bungalo.backups.nas import mount_smb
 from bungalo.config import BungaloConfig
 from bungalo.config.endpoints import NASEndpoint
+from bungalo.constants import DEFAULT_PYICLOUD_COOKIE_PATH
 from bungalo.io import progress_bar
 from bungalo.logger import CONSOLE, LOGGER
 from bungalo.slack import SlackClient
@@ -52,6 +53,7 @@ class iPhotoSync:
         photo_size: AssetVersionSize,
         output_path: Path,
         slack_client: SlackClient,
+        cookie_path: Path,
         concurrency: int = 10,
     ) -> None:
         """
@@ -73,6 +75,7 @@ class iPhotoSync:
         self.output_path = output_path
         self.concurrency = concurrency
         self.slack_client = slack_client
+        self.cookie_path = cookie_path
 
         self._completed_photos = 0
 
@@ -295,9 +298,7 @@ class iPhotoSync:
             )
         download.set_utime(str(download_path), created_date)
 
-    async def icloud_login(
-        self, cookie_directory: str = "~/.pyicloud"
-    ) -> PyiCloudService:
+    async def icloud_login(self) -> PyiCloudService:
         """
         Authenticate with iCloud services.
 
@@ -315,14 +316,18 @@ class iPhotoSync:
             file_match_policy=FileMatchPolicy.NAME_SIZE_DEDUP_WITH_SUFFIX,
             apple_id=self.username,
             password=self.password,
-            cookie_directory=cookie_directory,
+            cookie_directory=str(self.cookie_path),
             client_id=self.client_id,
         )
 
         try:
-            if icloud.requires_2fa or icloud.requires_2sa:
+            if icloud.requires_2fa:
                 LOGGER.info("Two-factor authentication is required")
                 await self.request_2fa(icloud)
+            elif icloud.requires_2sa:
+                raise Exception(
+                    "Two-step authentication is not supported, 2FA with Apple devices is the more modern approach"
+                )
 
             return icloud
 
@@ -342,80 +347,55 @@ class iPhotoSync:
 
     async def request_2fa(self, icloud: PyiCloudService) -> None:
         """
-        Request and validate two-step authentication through Slack interaction.
+        Request and validate two-factor authentication through Slack interaction.
+        With the modern 2FA approach, a code is automatically sent to trusted devices.
+        We just need to get the code from the user and validate it.
 
         :param icloud: Authenticated iCloud service instance
         :raises Exception: If 2FA validation fails
         """
-        devices = icloud.trusted_devices
-        if not devices:
-            raise Exception("No trusted devices found for 2FA")
-
-        # Format device list for Slack message
-        device_list = "\n".join(
-            f"{i}: {device.get('deviceName', f'SMS to {device.get("phoneNumber", "Unknown")}')}"
-            for i, device in enumerate(devices)
-        )
-
         message = (
-            "🔐 Two-step authentication required\n\n"
-            "Available devices:\n"
-            f"{device_list}\n\n"
-            "Please reply in this thread with a device number."
+            "🔐 Two-factor authentication required\n\n"
+            "A verification code has been automatically sent to your trusted devices.\n"
+            "Please enter the code in this thread."
         )
 
         root_message = await self.slack_client.create_status(message)
 
         try:
             async with self.slack_client.listen_for_replies(root_message) as queue:
-                device_index_str = (await queue.next(timeout=60))["text"]
-                try:
-                    device_index = int(device_index_str)
-                    if device_index < 0 or device_index >= len(devices):
-                        raise ValueError()
-                except ValueError:
+                while True:
+                    verification_code = (await queue.next(timeout=120))["text"].strip()
+
+                    # Validate code format
+                    if len(verification_code) != 6 or not verification_code.isdigit():
+                        await self.slack_client.create_status(
+                            "❌ Invalid code format. Please enter a 6-digit code.",
+                            parent_ts=root_message,
+                        )
+                        continue
+
+                    # Try to validate the code
+                    if not icloud.validate_2fa_code(verification_code):
+                        await self.slack_client.create_status(
+                            "❌ Invalid verification code. Please try again.",
+                            parent_ts=root_message,
+                        )
+                        continue
+
+                    # Code validated successfully
                     await self.slack_client.create_status(
-                        f"❌ Invalid device index: {device_index_str}. Please choose a number between 0 and {len(devices) - 1}.",
+                        "✅ Two-factor authentication completed successfully!",
                         parent_ts=root_message,
                     )
-                    raise Exception(f"Invalid device index: {device_index_str}")
-
-                device = devices[device_index]
-                await self.slack_client.create_status(
-                    "📱 Sending verification code...", parent_ts=root_message
-                )
-
-                if not icloud.send_verification_code(device):
-                    await self.slack_client.create_status(
-                        "❌ Failed to send verification code", parent_ts=root_message
-                    )
-                    raise Exception("Failed to send verification code")
-
-                await self.slack_client.create_status(
-                    "✉️ Verification code sent. Please enter the code in this thread.",
-                    parent_ts=root_message,
-                )
-
-                verification_code = (await queue.next(timeout=120))["text"]
-
-                if not icloud.validate_verification_code(device, verification_code):
-                    await self.slack_client.create_status(
-                        "❌ Failed to validate verification code",
-                        parent_ts=root_message,
-                    )
-                    raise Exception("Failed to validate verification code")
-
-                await self.slack_client.create_status(
-                    "✅ Two-factor authentication completed successfully!",
-                    parent_ts=root_message,
-                )
+                    return
 
         except asyncio.TimeoutError:
             await self.slack_client.create_status(
-                "⏰ Two-step authentication timed out waiting for response",
+                "⏰ Two-factor authentication timed out waiting for response",
                 parent_ts=root_message,
             )
-            raise Exception("Two-step authentication timed out waiting for response")
+            raise Exception("Two-factor authentication timed out waiting for response")
 
 
 async def main(config: BungaloConfig) -> None:
@@ -466,6 +446,7 @@ async def main(config: BungaloConfig) -> None:
                     album_name=config.iphoto.album_name,
                     photo_size=AssetVersionSize(config.iphoto.photo_size),
                     slack_client=slack_client,
+                    cookie_path=Path(DEFAULT_PYICLOUD_COOKIE_PATH).expanduser(),
                     # Re-define the output location relative to the mount point
                     output_path=Path(mount_dir) / config.iphoto.output.path,
                 )
