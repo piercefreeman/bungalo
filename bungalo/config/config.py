@@ -22,6 +22,9 @@ class NutConfig(BaseSettings):
     shutdown_threshold: int = 20  # Shutdown when battery below 20%
     startup_threshold: int = 50  # Start back up when battery above 50%
     managed_hardware: list[ManagedHardware] = []
+    bootstrap_retry_interval: timedelta = timedelta(
+        minutes=5
+    )  # Retry bootstrap every 5 minutes on failure
 
 
 class iPhotoBackupConfig(BaseSettings):

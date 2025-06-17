@@ -1,24 +1,18 @@
 import asyncio
 import sys
+from datetime import timedelta
+from traceback import format_exc
 
 from bungalo.config import BungaloConfig
 from bungalo.constants import NUT_SERVER_PORT
 from bungalo.logger import CONSOLE, LOGGER
 from bungalo.nut.battery import UPSMonitor
-from bungalo.nut.bootstrap import bootstrap_nut
+from bungalo.nut.bootstrap import bootstrap_nut, check_nut_status
 from bungalo.nut.client_manager import ClientMachine, ClientManager
 from bungalo.slack import SlackClient
 
 
 async def main(config: BungaloConfig):
-    # First try to bootstrap NUT if we're on Linux
-    if sys.platform == "linux":
-        try:
-            await bootstrap_nut()
-        except Exception as e:
-            CONSOLE.print(f"[red]Failed to bootstrap NUT: {e}[/red]")
-            sys.exit(1)
-
     client_manager = ClientManager(
         [
             ClientMachine(
@@ -34,10 +28,69 @@ async def main(config: BungaloConfig):
         channel_id=config.slack.channel,
     )
 
-    await asyncio.gather(
-        poll_task(client_manager, slack_client, config),
-        healthcheck_task(client_manager, slack_client),
-    )
+    # Run bootstrap, poll, and healthcheck tasks concurrently
+    if sys.platform == "linux":
+        await asyncio.gather(
+            bootstrap_task(slack_client, config.nut.bootstrap_retry_interval),
+            poll_task(client_manager, slack_client, config),
+            healthcheck_task(client_manager, slack_client),
+        )
+    else:
+        # Skip bootstrap on non-Linux platforms
+        await asyncio.gather(
+            poll_task(client_manager, slack_client, config),
+            healthcheck_task(client_manager, slack_client),
+        )
+
+
+async def bootstrap_task(slack_client: SlackClient, retry_interval: timedelta):
+    """
+    Continuously attempt to bootstrap NUT with retry logic.
+
+    :param slack_client: Slack client for notifications
+    :param retry_interval: Time to wait between retry attempts
+    """
+    bootstrap_successful = False
+
+    while True:
+        if not bootstrap_successful:
+            try:
+                LOGGER.info("Attempting to bootstrap NUT...")
+                await bootstrap_nut()
+                await slack_client.create_status(
+                    "✅ NUT bootstrap completed successfully"
+                )
+                bootstrap_successful = True
+                LOGGER.info("NUT bootstrap successful, monitoring for failures...")
+            except Exception as e:
+                error_msg = f"Failed to bootstrap NUT: {e}"
+                CONSOLE.print(f"[red]{error_msg}[/red]")
+                LOGGER.error(f"{error_msg}\n{format_exc()}")
+                await slack_client.create_status(f"❌ {error_msg}")
+                LOGGER.info(
+                    f"Retrying NUT bootstrap in {retry_interval.total_seconds()} seconds..."
+                )
+                await asyncio.sleep(retry_interval.total_seconds())
+                continue
+
+        # If bootstrap was successful, check if NUT is still running
+        try:
+            if not await check_nut_status():
+                LOGGER.warning(
+                    "NUT is no longer responding, will attempt to re-bootstrap"
+                )
+                await slack_client.create_status(
+                    "⚠️ NUT stopped responding, attempting to re-bootstrap..."
+                )
+                bootstrap_successful = False
+                continue
+        except Exception as e:
+            LOGGER.error(f"Error checking NUT status: {e}")
+            bootstrap_successful = False
+            continue
+
+        # Wait before next health check
+        await asyncio.sleep(60)  # Check NUT health every minute
 
 
 async def poll_task(
@@ -45,46 +98,64 @@ async def poll_task(
     slack_client: SlackClient,
     config: BungaloConfig,
 ):
+    # Wait for NUT to be available before starting to poll
+    LOGGER.info("Waiting for NUT to be available before starting polling...")
+    while True:
+        try:
+            if await check_nut_status():
+                LOGGER.info("NUT is available, starting UPS monitoring...")
+                break
+        except Exception as e:
+            LOGGER.debug(f"NUT not yet available: {e}")
+        await asyncio.sleep(10)  # Check every 10 seconds
+
     # Update these values based on your NUT server configuration
     monitor = UPSMonitor(host="localhost", port=NUT_SERVER_PORT, ups_name="ups")
     clients_shutdown = False
 
-    async for status in monitor.poll():
-        CONSOLE.print(f"[green]UPS status changed: {status}[/green]")
+    try:
+        async for status in monitor.poll():
+            CONSOLE.print(f"[green]UPS status changed: {status}[/green]")
 
-        # Handle battery thresholds for client machines
-        if status.battery_charge is None:
-            continue
+            # Handle battery thresholds for client machines
+            if status.battery_charge is None:
+                continue
 
-        # Send a slack message
-        if not clients_shutdown and status.statuses.is_on_battery():
-            await slack_client.create_status(f"Battery at {status.battery_charge}%")
+            # Send a slack message
+            if not clients_shutdown and status.statuses.is_on_battery():
+                await slack_client.create_status(f"Battery at {status.battery_charge}%")
 
-        if (
-            status.battery_charge <= config.nut.shutdown_threshold
-            and not clients_shutdown
-            and status.statuses.is_on_battery()
-        ):
-            LOGGER.warning(
-                f"Battery at {status.battery_charge}% - below shutdown threshold. "
-                "Shutting down client machines..."
-            )
-            await client_manager.shutdown_clients()
-            await slack_client.create_status(
-                f"Battery at {status.battery_charge}% - below shutdown threshold. Shutting down client machines..."
-            )
-            clients_shutdown = True
-        elif (
-            status.battery_charge >= config.nut.startup_threshold
-            and clients_shutdown
-            and not status.statuses.is_on_battery()
-        ):
-            LOGGER.info(
-                f"Battery at {status.battery_charge}% - above startup threshold "
-                "and on AC power. Waking client machines..."
-            )
-            await client_manager.wake_clients()
-            clients_shutdown = False
+            if (
+                status.battery_charge <= config.nut.shutdown_threshold
+                and not clients_shutdown
+                and status.statuses.is_on_battery()
+            ):
+                LOGGER.warning(
+                    f"Battery at {status.battery_charge}% - below shutdown threshold. "
+                    "Shutting down client machines..."
+                )
+                await client_manager.shutdown_clients()
+                await slack_client.create_status(
+                    f"Battery at {status.battery_charge}% - below shutdown threshold. Shutting down client machines..."
+                )
+                clients_shutdown = True
+            elif (
+                status.battery_charge >= config.nut.startup_threshold
+                and clients_shutdown
+                and not status.statuses.is_on_battery()
+            ):
+                LOGGER.info(
+                    f"Battery at {status.battery_charge}% - above startup threshold "
+                    "and on AC power. Waking client machines..."
+                )
+                await client_manager.wake_clients()
+                clients_shutdown = False
+    except Exception as e:
+        error_msg = f"UPS polling encountered an error: {e}"
+        LOGGER.error(f"{error_msg}\n{format_exc()}")
+        await slack_client.create_status(f"❌ {error_msg}")
+        # The poll method already has retry logic, so this shouldn't normally happen
+        # but if it does, the entire main() function will restart
 
 
 async def healthcheck_task(

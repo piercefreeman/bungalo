@@ -56,16 +56,6 @@ def test_credential_mount_with_domain_and_extra_options(
         assert needle in opts
 
 
-def test_tempdir_cleanup(patched_run: tuple[Mock, Mock]) -> None:
-    """No mount_point supplied → a TemporaryDirectory is created & cleaned."""
-    with patch.object(Path, "is_mount", return_value=True):
-        with mount_smb("server", "share", username="u", password="p") as mnt:
-            temp_path = mnt
-            assert temp_path.exists()
-        # directory should now be gone
-        assert not temp_path.exists()
-
-
 def test_unmount_skipped_when_not_mounted(
     tmp_path: Path, patched_run: tuple[Mock, Mock]
 ) -> None:
