@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -36,7 +37,7 @@ def config_dict() -> dict[str, Any]:
         "slack": {
             "app_token": "test_app_token",
             "bot_token": "test_bot_token",
-            "channel": "test_channel",
+            "channel": "#test_channel",
         },
         "nut": {
             "shutdown_threshold": 15,
@@ -58,7 +59,6 @@ def config_dict() -> dict[str, Any]:
             "username": "test_user",
             "password": "test_pass",
             "client_id": "test_client_id",
-            "album_name": "Test Album",
             "photo_size": "large",
             "output": "nas:nas1://test-drive/photos",
         },
@@ -122,6 +122,7 @@ def test_nut_config_defaults() -> None:
     assert config.shutdown_threshold == 20
     assert config.startup_threshold == 50
     assert config.managed_hardware == []
+    assert config.bootstrap_retry_interval == timedelta(minutes=5)
 
 
 def test_sync_pair_validation() -> None:
@@ -158,7 +159,7 @@ def test_fully_parameterized_config(config_dict: dict[str, Any]) -> None:
 
     # Test root config
     assert isinstance(config.slack, SlackConfig)
-    assert config.slack.channel == "test_channel"
+    assert config.slack.channel == "#test_channel"
     assert config.slack.app_token == "test_app_token"
     assert config.slack.bot_token == "test_bot_token"
 

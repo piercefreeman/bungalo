@@ -63,6 +63,15 @@ NUT_ENTRYPOINTS = [
 async def start_nut_service(entrypoint: NutEntrypoint):
     """Start a NUT process."""
     LOGGER.info(f"Starting {entrypoint.name}...")
+
+    # Check if the process is already running before attempting to start
+    if await is_nut_service_running(entrypoint.name):
+        LOGGER.warning(
+            f"{entrypoint.name} is already running, attempting to stop first..."
+        )
+        await stop_nut_service(entrypoint)
+        await asyncio.sleep(2)
+
     process = run_command(
         entrypoint.start_command,
         capture_output=True,
@@ -72,7 +81,7 @@ async def start_nut_service(entrypoint: NutEntrypoint):
 
     if process.returncode != 0:
         LOGGER.error(
-            f"Driver debug output:\n{process.stderr}\n{process.stdout}\nReturn code: {process.returncode}"
+            f"Failed to start {entrypoint.name}:\nstderr: {process.stderr}\nstdout: {process.stdout}\nReturn code: {process.returncode}"
         )
 
         if entrypoint.name == "nut-driver":
@@ -85,12 +94,109 @@ async def start_nut_service(entrypoint: NutEntrypoint):
     await asyncio.sleep(2)  # Give process time to start
 
 
+async def is_nut_service_running(service_name: NutService) -> bool:
+    """Check if a NUT service is currently running."""
+    process_patterns = {
+        "nut-driver": ["usbhid-ups"],
+        "nut-server": ["upsd"],
+        "nut-monitor": ["upsmon"],
+    }
+
+    patterns = process_patterns.get(service_name, [])
+    for pattern in patterns:
+        try:
+            result = run_command(
+                ["pgrep", "-f", pattern], capture_output=True, text=True, check=False
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return True
+        except Exception:
+            continue
+
+    return False
+
+
 async def stop_nut_service(entrypoint: NutEntrypoint):
-    """Stop a NUT process."""
+    """Stop a NUT process with robust cleanup."""
+    LOGGER.info(f"Stopping {entrypoint.name}...")
+
+    # First try the graceful stop command
     try:
-        run_command(entrypoint.stop_command, check=False)
-    except Exception:
-        pass  # Ignore errors when stopping processes
+        process = run_command(
+            entrypoint.stop_command, capture_output=True, text=True, check=False
+        )
+        if process.returncode == 0:
+            LOGGER.info(f"Successfully stopped {entrypoint.name}")
+            return
+        else:
+            LOGGER.warning(
+                f"Graceful stop failed for {entrypoint.name}: {process.stderr}"
+            )
+    except Exception as e:
+        LOGGER.warning(f"Exception during graceful stop of {entrypoint.name}: {e}")
+
+    # If graceful stop failed, try to find and kill the process forcefully
+    await force_stop_nut_process(entrypoint.name)
+
+
+async def force_stop_nut_process(service_name: NutService):
+    """Force stop NUT processes by finding and killing them."""
+    # Map service names to process names to search for
+    process_patterns = {
+        "nut-driver": ["upsdrvctl", "usbhid-ups"],
+        "nut-server": ["upsd"],
+        "nut-monitor": ["upsmon"],
+    }
+
+    patterns = process_patterns.get(service_name, [])
+    if not patterns:
+        return
+
+    for pattern in patterns:
+        try:
+            # Find processes matching the pattern
+            result = run_command(
+                ["pgrep", "-f", pattern], capture_output=True, text=True, check=False
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split("\n")
+                for pid in pids:
+                    if pid:
+                        LOGGER.info(
+                            f"Force killing {service_name} process {pid} ({pattern})"
+                        )
+                        try:
+                            run_command(["kill", "-9", pid], check=False)
+                            # Give the process a moment to die
+                            await asyncio.sleep(0.5)
+                        except Exception as e:
+                            LOGGER.warning(f"Failed to kill process {pid}: {e}")
+        except Exception as e:
+            LOGGER.warning(f"Failed to find {pattern} processes: {e}")
+
+    # Clean up stale PID files
+    await cleanup_stale_pid_files(service_name)
+
+
+async def cleanup_stale_pid_files(service_name: NutService):
+    """Clean up stale PID files for NUT services."""
+    pid_files = {
+        "nut-driver": [
+            "/run/nut/usbhid-ups-ups.pid",
+            "/var/run/nut/usbhid-ups-ups.pid",
+        ],
+        "nut-server": ["/run/nut/upsd.pid", "/var/run/nut/upsd.pid"],
+        "nut-monitor": ["/run/nut/upsmon.pid", "/var/run/nut/upsmon.pid"],
+    }
+
+    files_to_clean = pid_files.get(service_name, [])
+    for pid_file in files_to_clean:
+        try:
+            if os.path.exists(pid_file):
+                LOGGER.info(f"Removing stale PID file: {pid_file}")
+                os.remove(pid_file)
+        except Exception as e:
+            LOGGER.warning(f"Failed to remove PID file {pid_file}: {e}")
 
 
 def diagnose_env_errors():
@@ -233,6 +339,10 @@ async def bootstrap_nut() -> None:
     # Stop any running services first
     for entrypoint in NUT_ENTRYPOINTS:
         await stop_nut_service(entrypoint)
+
+    # Give processes time to fully terminate before starting new ones
+    LOGGER.info("Waiting for processes to fully terminate...")
+    await asyncio.sleep(3)
 
     # Start services in correct order
     LOGGER.info("Starting NUT services...")

@@ -1,6 +1,11 @@
 [root]
 slack_webhook_url = "https://hooks.slack.com/..."
 
+[nut]
+  shutdown_threshold = 20  # Shutdown clients when battery below 20%
+  startup_threshold = 50   # Start clients when battery above 50%
+  bootstrap_retry_interval = "PT5M"  # Retry bootstrap every 5 minutes on failure
+
 [[nut.managed_hardware]]
   name = "NAS"
   local_ip = "192.168.1.172"
