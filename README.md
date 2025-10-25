@@ -122,6 +122,7 @@ make test -- -k test_fully_parameterized_config
      --privileged \
      --network host \
      --device=/dev/bus/usb \
+     -v /var/run/docker.sock:/var/run/docker.sock \
      -v ~/.bungalo:/root/.bungalo \
      -v /dev/bus/usb:/dev/bus/usb \
      --cap-add=SYS_ADMIN \
@@ -132,6 +133,7 @@ make test -- -k test_fully_parameterized_config
    The flags explained:
    - `--privileged`: Required for USB device access
    - `--network host`: Allows direct access to host network for SSH operations
+   - `-v /var/run/docker.sock:/var/run/docker.sock`: Grants Bungalo access to launch Plex containers via the host Docker daemon
    - `-v ~/.bungalo:/root/.bungalo`: Mounts your config directory
    - `-v /dev/bus/usb:/dev/bus/usb`: Mounts USB devices
 
@@ -142,6 +144,7 @@ make test -- -k test_fully_parameterized_config
         --privileged \
         --network host \
         --device=/dev/bus/usb \
+        -v /var/run/docker.sock:/var/run/docker.sock \
         -v ~/.bungalo:/root/.bungalo \
         -v /dev/bus/usb:/dev/bus/usb \
         --cap-add=SYS_ADMIN \

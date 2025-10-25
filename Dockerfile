@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     git \
     rclone \
     procps \
+    docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up NUT user and permissions

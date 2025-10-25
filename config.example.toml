@@ -39,11 +39,11 @@ slack_webhook_url = "https://hooks.slack.com/..."
 [media_server]
   plugin = "plex"
 
-  [[media_server.mounts]]
-    name = "movies"
-    path = "nas:unifi-nas://Media/Movies"
-    container_path = "/data/movies"
+[[media_server.mounts]]
+  name = "movies"
+  path = "nas:unifi-nas://Media/Movies"
+  container_path = "/data/movies"
 
-  [[media_server.mounts]]
-    name = "tv"
-    path = "nas:unifi-nas://Media/TV"
+[[media_server.mounts]]
+  name = "tv"
+  path = "nas:unifi-nas://Media/TV"

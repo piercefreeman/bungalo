@@ -18,6 +18,7 @@ docker run -d \
      --privileged \
      --network host \
      --device=/dev/bus/usb \
+     -v /var/run/docker.sock:/var/run/docker.sock \
      --cap-add=SYS_ADMIN \
      --device /dev/fuse \
      -v ~/.bungalo:/root/.bungalo \
