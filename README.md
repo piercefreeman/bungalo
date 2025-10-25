@@ -83,7 +83,7 @@ Define NAS shares that should be exposed to Plex via the new `media_server` conf
 bungalo plex
 ```
 
-Mounts are published to the container as read-only volumes so Plex can index them without modifying source data.
+Mounts are published to the container as read-only volumes so Plex can index them without modifying source data. We launch a plex docker container of its own in order to provide a proper amount of isolation from our encryption credentials.
 
 ## Future Work
 
