@@ -1,3 +1,12 @@
+# Build the Next.js frontend
+FROM node:20-bullseye AS frontend_build
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm install
+COPY frontend/ .
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build && rm -rf .next/cache
+
 # Install uv
 FROM ubuntu:24.04
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -11,9 +20,13 @@ RUN apt-get update && apt-get install -y \
     rclone \
     procps \
     docker.io \
-    nodejs \
-    npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy Node runtime from build stage
+COPY --from=frontend_build /usr/local/bin/node /usr/local/bin/node
+COPY --from=frontend_build /usr/local/bin/npm /usr/local/bin/npm
+COPY --from=frontend_build /usr/local/bin/npx /usr/local/bin/npx
+COPY --from=frontend_build /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 # Set up NUT user and permissions
 RUN groupadd -g 999 nut || true && \
@@ -42,9 +55,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy the project into the image
 ADD . /app
 
-# Install frontend dependencies
-RUN --mount=type=cache,target=/root/.npm \
-    npm install --prefix frontend
+# Copy frontend build artifacts
+COPY --from=frontend_build /app/frontend/.next /app/frontend/.next
+COPY --from=frontend_build /app/frontend/.next/static /app/frontend/.next/static
+COPY --from=frontend_build /app/frontend/public /app/frontend/public
+COPY --from=frontend_build /app/frontend/package.json /app/frontend/package.json
+COPY --from=frontend_build /app/frontend/server-entry.js /app/frontend/server-entry.js
 
 # Sync the project
 RUN --mount=type=cache,target=/root/.cache/uv \

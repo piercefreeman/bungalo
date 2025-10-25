@@ -27,7 +27,7 @@ async def run_fastapi(
     port: int | None = None,
 ) -> None:
     bind_host = host or os.environ.get("BUNGALO_API_HOST", "127.0.0.1")
-    bind_port = port or _get_int_env("BUNGALO_API_PORT", 8000)
+    bind_port = port or _get_int_env("BUNGALO_API_PORT", 5006)
     log_level = os.environ.get("BUNGALO_API_LOG_LEVEL", "info")
     LOGGER.info("Starting FastAPI server on http://%s:%s", bind_host, bind_port)
     config = uvicorn.Config(
@@ -59,7 +59,7 @@ async def run_nextjs(
     api_base_url = (
         api_base
         or os.environ.get("NEXT_PUBLIC_API_BASE")
-        or f"http://{public_host}:{_get_int_env('BUNGALO_API_PORT', 8000)}"
+        or f"http://{public_host}:{_get_int_env('BUNGALO_API_PORT', 5006)}"
     )
 
     env = os.environ.copy()
@@ -69,17 +69,21 @@ async def run_nextjs(
         "BUNGALO_DASHBOARD_URL",
         f"http://{external_host or '127.0.0.1'}:{next_port}",
     )
+    env.setdefault("NODE_ENV", "production")
+    env.setdefault("HOST", "0.0.0.0")
+    env.setdefault("HOSTNAME", external_host or "0.0.0.0")
     if external_host:
-        env.setdefault("HOST", "0.0.0.0")
+        env.setdefault("NEXT_PUBLIC_SITE_URL", f"http://{external_host}:{next_port}")
 
     command = env.get("BUNGALO_NEXT_COMMAND")
     if command:
         argv = shlex.split(command)
     else:
-        argv = ["npm", "run", "dev"]
+        argv = ["node", "server-entry.js"]
 
     LOGGER.info(
-        "Starting Next.js dashboard at http://127.0.0.1:%s (API: %s)",
+        "Starting Next.js dashboard at http://%s:%s (API: %s)",
+        external_host or "127.0.0.1",
         next_port,
         api_base_url,
     )

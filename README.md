@@ -80,7 +80,9 @@ cd frontend
 npm install
 ```
 
-Environment variables allow overrides, but by default the API listens on `127.0.0.1:8000` and the dashboard on `127.0.0.1:3000`.
+Environment variables allow overrides, but by default the API listens on `0.0.0.0:5006` and the dashboard on `0.0.0.0:3000`.
+
+Set `[root].self_ip` (or export `BUNGALO_EXTERNAL_HOST`) if you want Slack links and the dashboard itself to use a Tailscale or other reachable address; both FastAPI and Next.js bind to `0.0.0.0` inside the container, so advertising the correct hostname ensures browsers connect to the right place.
 
 ### Media Server
 
