@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 from tomllib import loads as toml_loads
 
@@ -6,8 +7,10 @@ from click import group
 
 from bungalo.backups.iphoto import main as iphoto_main
 from bungalo.backups.remote import main as remote_main
+from bungalo.app_manager import AppManager
 from bungalo.config import BungaloConfig
 from bungalo.constants import DEFAULT_CONFIG_FILE
+from bungalo.dashboard import start_dashboard_services
 from bungalo.io import async_to_sync
 from bungalo.nut.cli import main as battery_main
 from bungalo.plugins.plex import main as plex_main
@@ -24,7 +27,17 @@ def cli():
 async def run_all():
     """Run all bungalo workflows."""
     config = get_config()
+
+    dashboard_port_raw = os.environ.get("BUNGALO_NEXT_PORT")
+    try:
+        dashboard_port = int(dashboard_port_raw) if dashboard_port_raw else 3000
+    except ValueError:
+        dashboard_port = 3000
+    os.environ.setdefault("BUNGALO_DASHBOARD_URL", f"http://127.0.0.1:{dashboard_port}")
+    AppManager.get()  # Ensure singleton initializes with dashboard URL
+
     tasks = [
+        start_dashboard_services(),
         battery_main(config),
         iphoto_main(config),
         remote_main(config),

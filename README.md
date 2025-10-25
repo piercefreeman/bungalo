@@ -57,9 +57,23 @@ To configure the server behavior, add a config file to: `~/.bungalo/config.toml`
 
 ### Slack Integration
 
-We ping Slack after successful syncs, when there are power failures, etc. We also use channels as the IO interface for receiving 2FA codes when we need to get additional permission from the user.
+We still ping Slack after successful syncs and outages, but interactive prompts (like iCloud 2FA) now flow through the Bungalo dashboard. When a task needs input we post a deep link back to the dashboard instead of collecting replies in-channel. The `slack_manifest.json` captures the current configuration of our private Slack app.
 
-The `slack_manifest.json` captures the current configuration of our private slack app.
+### Dashboard
+
+Launching `bungalo run-all` now boots two companion services:
+
+- A FastAPI control plane (`bungalo/web_server.py`) that surfaces runtime state and accepts task responses.
+- A Next.js dashboard in `frontend/` powered by shadcn components for a monochrome, serif UI.
+
+Make sure Node.js is available and install dependencies once:
+
+```bash
+cd frontend
+npm install
+```
+
+Environment variables allow overrides, but by default the API listens on `127.0.0.1:8000` and the dashboard on `127.0.0.1:3000`.
 
 ### Media Server
 

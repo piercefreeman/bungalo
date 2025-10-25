@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-background text-foreground font-serif antialiased;
+}
+
+a {
+  @apply underline decoration-foreground/50 underline-offset-4 hover:decoration-foreground;
+}
+
+input,
+textarea {
+  @apply bg-white text-foreground;
+}

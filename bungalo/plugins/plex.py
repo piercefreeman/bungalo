@@ -3,6 +3,7 @@ import os
 from contextlib import ExitStack
 from pathlib import Path
 
+from bungalo.app_manager import AppManager
 from bungalo.backups.nas import mount_smb
 from bungalo.config import BungaloConfig
 from bungalo.config.endpoints import NASEndpoint
@@ -76,6 +77,9 @@ async def main(config: BungaloConfig) -> None:
     """
     Launch the Plex media server container after mounting configured NAS paths.
     """
+    app_manager = AppManager.get()
+    service_name = "plex"
+
     media_config = config.media_server
     if not media_config:
         raise ValueError("Media server config not defined")
@@ -155,8 +159,28 @@ async def main(config: BungaloConfig) -> None:
             f"Starting Plex container '{CONTAINER_NAME}' with image '{PLEX_IMAGE}'"
         )
         await _remove_existing_container()
+        await app_manager.update_service(
+            service_name,
+            state="running",
+            detail="Starting Plex media server container",
+        )
         process = await asyncio.create_subprocess_exec(*docker_cmd)
+        await app_manager.update_service(
+            service_name,
+            state="running",
+            detail="Plex media server running",
+        )
         returncode = await process.wait()
 
         if returncode:
+            await app_manager.update_service(
+                service_name,
+                state="error",
+                detail=f"Plex container exited with code {returncode}",
+            )
             raise RuntimeError(f"Plex container exited with code {returncode}")
+        await app_manager.update_service(
+            service_name,
+            state="completed",
+            detail="Plex container stopped",
+        )

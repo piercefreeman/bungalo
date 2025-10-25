@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
 from shutil import copyfile
@@ -21,6 +21,7 @@ from pyicloud_ipd.version_size import AssetVersionSize
 from tzlocal import get_localzone
 
 from bungalo.backups.nas import mount_smb
+from bungalo.app_manager import AppManager
 from bungalo.config import BungaloConfig
 from bungalo.config.endpoints import NASEndpoint
 from bungalo.constants import DEFAULT_PYICLOUD_COOKIE_PATH
@@ -372,48 +373,37 @@ class iPhotoSync:
         :param icloud: Authenticated iCloud service instance
         :raises Exception: If 2FA validation fails
         """
-        message = (
-            "🔐 Two-factor authentication required\n\n"
-            "A verification code has been automatically sent to your trusted devices.\n"
-            "Please enter the code in this thread."
+        app_manager = AppManager.get()
+        task = await app_manager.create_task(
+            title="iCloud Two-Factor Authentication",
+            prompt="Enter the six-digit code sent to your trusted devices.",
+            metadata={"type": "icloud_2fa"},
         )
 
-        root_message = await self.slack_client.create_status(message)
+        await self.slack_client.create_status(
+            "🔐 Two-factor authentication required\n\n"
+            f"Visit {task.url} to submit the verification code.",
+        )
 
-        try:
-            async with self.slack_client.listen_for_replies(root_message) as queue:
-                while True:
-                    verification_code = (await queue.next(timeout=120))["text"].strip()
+        while True:
+            verification_code = (await task.wait()).strip()
 
-                    # Validate code format
-                    if len(verification_code) != 6 or not verification_code.isdigit():
-                        await self.slack_client.create_status(
-                            "❌ Invalid code format. Please enter a 6-digit code.",
-                            parent_ts=root_message,
-                        )
-                        continue
+            if len(verification_code) != 6 or not verification_code.isdigit():
+                await task.request_retry("Please enter a 6-digit numeric code.")
+                continue
 
-                    # Try to validate the code
-                    if not icloud.validate_2fa_code(verification_code):
-                        await self.slack_client.create_status(
-                            "❌ Invalid verification code. Please try again.",
-                            parent_ts=root_message,
-                        )
-                        continue
+            if not icloud.validate_2fa_code(verification_code):
+                await self.slack_client.create_status(
+                    "❌ Invalid verification code submitted via dashboard. Please try again."
+                )
+                await task.request_retry("Invalid verification code. Please try again.")
+                continue
 
-                    # Code validated successfully
-                    await self.slack_client.create_status(
-                        "✅ Two-factor authentication completed successfully!",
-                        parent_ts=root_message,
-                    )
-                    return
-
-        except asyncio.TimeoutError:
+            await task.mark_completed()
             await self.slack_client.create_status(
-                "⏰ Two-factor authentication timed out waiting for response",
-                parent_ts=root_message,
+                "✅ Two-factor authentication completed successfully!"
             )
-            raise Exception("Two-factor authentication timed out waiting for response")
+            return
 
 
 async def main(config: BungaloConfig) -> None:
@@ -446,7 +436,25 @@ async def main(config: BungaloConfig) -> None:
     if not endpoint:
         raise ValueError("No NAS endpoint found in config")
 
+    app_manager = AppManager.get()
+    service_name = "iphoto_sync"
+    interval_seconds = config.iphoto.interval.total_seconds()
+
+    await app_manager.update_service(
+        service_name,
+        state="idle",
+        detail="Waiting to start iCloud photo sync",
+        next_run_at=datetime.now(timezone.utc),
+    )
+
     while True:
+        start_time = datetime.now(timezone.utc)
+        await app_manager.update_service(
+            service_name,
+            state="running",
+            detail="Syncing iCloud photo library",
+            last_run_at=start_time,
+        )
         try:
             with mount_smb(
                 server=endpoint.ip_address,
@@ -472,6 +480,23 @@ async def main(config: BungaloConfig) -> None:
         except Exception as e:
             CONSOLE.print(f"Error syncing iPhoto library: {e} {format_exc()}")
             await slack_client.create_status(f"Error syncing iPhoto: {e}")
+            completed_at = datetime.now(timezone.utc)
+            await app_manager.update_service(
+                service_name,
+                state="error",
+                detail=f"Last sync failed: {e}",
+                last_run_at=completed_at,
+                next_run_at=completed_at + config.iphoto.interval,
+            )
+        else:
+            completed_at = datetime.now(timezone.utc)
+            await app_manager.update_service(
+                service_name,
+                state="idle",
+                detail="Last sync completed successfully",
+                last_run_at=completed_at,
+                next_run_at=completed_at + config.iphoto.interval,
+            )
 
         # Run every 24 hours
-        await asyncio.sleep(config.iphoto.interval.total_seconds())
+        await asyncio.sleep(interval_seconds)
