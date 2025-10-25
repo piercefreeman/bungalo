@@ -10,6 +10,7 @@ from bungalo.config import BungaloConfig
 from bungalo.constants import DEFAULT_CONFIG_FILE
 from bungalo.io import async_to_sync
 from bungalo.nut.cli import main as battery_main
+from bungalo.plugins.plex import main as plex_main
 from bungalo.ssh import main as ssh_main
 
 
@@ -23,11 +24,14 @@ def cli():
 async def run_all():
     """Run all bungalo workflows."""
     config = get_config()
-    await asyncio.gather(
+    tasks = [
         battery_main(config),
         iphoto_main(config),
         remote_main(config),
-    )
+    ]
+    if config.media_server and config.media_server.plugin == "plex":
+        tasks.append(plex_main(config))
+    await asyncio.gather(*tasks)
 
 
 @cli.command()
@@ -59,6 +63,14 @@ async def remote_backup():
 async def ssh_setup():
     """Generate SSH key and show instructions for UniFi Network setup."""
     await ssh_main()
+
+
+@cli.command()
+@async_to_sync
+async def plex():
+    """Launch the Plex media server plugin."""
+    config = get_config()
+    await plex_main(config)
 
 
 def get_config():

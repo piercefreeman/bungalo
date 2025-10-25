@@ -61,6 +61,16 @@ We ping Slack after successful syncs, when there are power failures, etc. We als
 
 The `slack_manifest.json` captures the current configuration of our private slack app.
 
+### Media Server
+
+Define NAS shares that should be exposed to Plex via the new `media_server` configuration block. Bungalo will mount each NAS share and launch the Plex container on demand:
+
+```bash
+bungalo plex
+```
+
+Mounts are published to the container as read-only volumes so Plex can index them without modifying source data.
+
 ## Future Work
 
 - Unifi devices don't support wake-on-lan, so once they're shutdown there's no way to remotely start them back up. We'll have to combine it with a remotely controllable Power Distribution Unit if we want to add the restart behavior.

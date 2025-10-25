@@ -23,7 +23,7 @@ slack_webhook_url = "https://hooks.slack.com/..."
   password = "password"
 
 [[endpoints.b2]]
-  nickname = "b2-us
+  nickname = "b2-us"
   key_id = ""
   application_key = ""
 
@@ -35,3 +35,15 @@ slack_webhook_url = "https://hooks.slack.com/..."
   username = "your_username"
   password = "your_password"
   output_directory = "iphoto"
+
+[media_server]
+  plugin = "plex"
+
+  [[media_server.mounts]]
+    name = "movies"
+    path = "nas:unifi-nas://Media/Movies"
+    container_path = "/data/movies"
+
+  [[media_server.mounts]]
+    name = "tv"
+    path = "nas:unifi-nas://Media/TV"

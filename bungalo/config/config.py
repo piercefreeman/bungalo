@@ -1,5 +1,5 @@
 from datetime import timedelta
-from typing import Sequence
+from typing import Literal, Sequence
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -48,6 +48,40 @@ class SyncPair(BaseSettings):
 class RemoteBackupConfig(BaseSettings):
     sync: list[SyncPair]
     interval: timedelta = timedelta(hours=6)
+
+
+class MediaServerMount(BaseModel):
+    name: str
+    path: NASPath
+    container_path: str | None = None
+
+    @field_validator("container_path")
+    @classmethod
+    def validate_container_path(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("/"):
+            raise ValueError("container_path must be an absolute path starting with '/'")
+        return value
+
+
+class MediaServerConfig(BaseSettings):
+    plugin: Literal["plex"]
+    mounts: list[MediaServerMount] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_mounts(self):
+        names = [mount.name for mount in self.mounts]
+        if len(names) != len(set(names)):
+            raise ValueError("Duplicate media server mount names are not allowed")
+
+        container_paths: set[str] = set()
+        for mount in self.mounts:
+            container_path = mount.container_path or f"/data/{mount.name}"
+            if container_path in container_paths:
+                raise ValueError(
+                    f"Duplicate container mount path detected: {container_path}"
+                )
+            container_paths.add(container_path)
+        return self
 
 
 class EndpointConfig(BaseSettings):
@@ -100,6 +134,9 @@ class BungaloConfig(BaseSettings):
 
     # Storage locations
     endpoints: EndpointConfig = Field(default_factory=EndpointConfig)
+
+    # Media servers (e.g., Plex)
+    media_server: MediaServerConfig | None = None
 
     # Validate that all of the remote files that were validated to NAS files or
     # B2 accounts match the nicknames that we have specified
