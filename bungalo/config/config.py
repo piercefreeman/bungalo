@@ -9,7 +9,11 @@ from bungalo.config.paths import B2Path, FileLocation, NASPath
 
 
 class RootConfig(BaseSettings):
-    pass
+    """
+    General-purpose configuration that applies to the whole Bungalo runtime.
+    """
+
+    self_ip: str | None = None
 
 
 class ManagedHardware(BaseSettings):

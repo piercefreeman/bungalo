@@ -55,6 +55,13 @@ The `SSHManager` manages a local bungalo ssh credential that we place into the b
 
 To configure the server behavior, add a config file to: `~/.bungalo/config.toml`. See `config.example.toml` for the expected format.
 
+If you access the dashboard over a different interface (for example, through Tailscale), set the optional `root.self_ip` field so Slack links point at a reachable address:
+
+```toml
+[root]
+self_ip = "100.68.0.12"
+```
+
 ### Slack Integration
 
 We still ping Slack after successful syncs and outages, but interactive prompts (like iCloud 2FA) now flow through the Bungalo dashboard. When a task needs input we post a deep link back to the dashboard instead of collecting replies in-channel. The `slack_manifest.json` captures the current configuration of our private Slack app.

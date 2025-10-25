@@ -1,5 +1,6 @@
 [root]
-slack_webhook_url = "https://hooks.slack.com/..."
+# Optional: advertise a specific IP (e.g. Tailscale) for dashboard links
+self_ip = "100.64.0.10"
 
 [nut]
   shutdown_threshold = 20  # Shutdown clients when battery below 20%

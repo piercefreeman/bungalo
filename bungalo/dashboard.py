@@ -53,16 +53,24 @@ async def run_nextjs(
         return
 
     next_port = port or _get_int_env("BUNGALO_NEXT_PORT", 3000)
+    external_host = os.environ.get("BUNGALO_EXTERNAL_HOST")
+    api_host = os.environ.get("BUNGALO_API_HOST", "127.0.0.1")
+    public_host = external_host or api_host
     api_base_url = (
         api_base
         or os.environ.get("NEXT_PUBLIC_API_BASE")
-        or f"http://{os.environ.get('BUNGALO_API_HOST', '127.0.0.1')}:{_get_int_env('BUNGALO_API_PORT', 8000)}"
+        or f"http://{public_host}:{_get_int_env('BUNGALO_API_PORT', 8000)}"
     )
 
     env = os.environ.copy()
     env.setdefault("PORT", str(next_port))
     env.setdefault("NEXT_PUBLIC_API_BASE", api_base_url)
-    env.setdefault("BUNGALO_DASHBOARD_URL", f"http://127.0.0.1:{next_port}")
+    env.setdefault(
+        "BUNGALO_DASHBOARD_URL",
+        f"http://{external_host or '127.0.0.1'}:{next_port}",
+    )
+    if external_host:
+        env.setdefault("HOST", "0.0.0.0")
 
     command = env.get("BUNGALO_NEXT_COMMAND")
     if command:

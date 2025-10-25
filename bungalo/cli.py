@@ -33,7 +33,24 @@ async def run_all():
         dashboard_port = int(dashboard_port_raw) if dashboard_port_raw else 3000
     except ValueError:
         dashboard_port = 3000
-    os.environ.setdefault("BUNGALO_DASHBOARD_URL", f"http://127.0.0.1:{dashboard_port}")
+    api_port_raw = os.environ.get("BUNGALO_API_PORT")
+    try:
+        api_port = int(api_port_raw) if api_port_raw else 8000
+    except ValueError:
+        api_port = 8000
+
+    external_host = config.root.self_ip
+    if external_host:
+        os.environ.setdefault("BUNGALO_EXTERNAL_HOST", external_host)
+        os.environ.setdefault("BUNGALO_API_HOST", "0.0.0.0")
+        os.environ.setdefault(
+            "NEXT_PUBLIC_API_BASE", f"http://{external_host}:{api_port}"
+        )
+    else:
+        os.environ.setdefault("BUNGALO_API_HOST", "127.0.0.1")
+
+    dashboard_host = external_host or "127.0.0.1"
+    os.environ.setdefault("BUNGALO_DASHBOARD_URL", f"http://{dashboard_host}:{dashboard_port}")
     AppManager.get()  # Ensure singleton initializes with dashboard URL
 
     tasks = [
