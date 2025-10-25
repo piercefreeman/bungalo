@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     rclone \
     procps \
     docker.io \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up NUT user and permissions
@@ -49,7 +51,6 @@ RUN mkdir -p /root/.bungalo
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV DOCKER_CONTEXT=true
 
 # Run all background processes
 CMD ["uv", "run", "bungalo", "run-all"]
