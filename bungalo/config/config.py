@@ -69,6 +69,7 @@ class MediaServerMount(BaseModel):
 
 class MediaServerConfig(BaseSettings):
     plugin: Literal["plex"]
+    transcode: NASPath
     mounts: list[MediaServerMount] = Field(default_factory=list)
 
     @model_validator(mode="after")

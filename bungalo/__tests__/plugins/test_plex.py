@@ -33,14 +33,28 @@ async def test_plex_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, tmp_
             (mount_point / "Movies").mkdir(parents=True, exist_ok=True)
         elif share == "share_tv":
             (mount_point / "Shows").mkdir(parents=True, exist_ok=True)
+        elif share == "share_transcode":
+            (mount_point / "Transcode").mkdir(parents=True, exist_ok=True)
         yield mount_point
+
+    slack_messages: list[str] = []
+
+    class DummySlackClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def create_status(self, text: str, parent_ts=None):
+            slack_messages.append(text)
+            return None
 
     monkeypatch.setenv("BUNGALO_PLEX_ROOT", str(tmp_path / "plex"))
     monkeypatch.delenv("TZ", raising=False)
     monkeypatch.setattr(plex.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(plex, "mount_smb", fake_mount_smb)
+    monkeypatch.setattr(plex, "SlackClient", DummySlackClient)
 
     config_dict = {
+        "root": {"self_ip": "tailscale.plex"},
         "slack": {
             "app_token": "app",
             "bot_token": "bot",
@@ -60,6 +74,7 @@ async def test_plex_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, tmp_
         },
         "media_server": {
             "plugin": "plex",
+            "transcode": "nas:plex-nas://share_transcode/Transcode",
             "mounts": [
                 {
                     "name": "movies",
@@ -93,7 +108,7 @@ async def test_plex_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, tmp_
     ]
 
     config_dir = Path(tmp_path / "plex" / "config")
-    transcode_dir = Path(tmp_path / "plex" / "transcode")
+    transcode_dir = Path(tmp_path / "plex" / "mounts" / "transcode" / "Transcode")
     movies_dir = Path(tmp_path / "plex" / "mounts" / "movies" / "Movies")
     tv_dir = Path(tmp_path / "plex" / "mounts" / "tv" / "Shows")
 
@@ -101,3 +116,5 @@ async def test_plex_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, tmp_
     assert f"{transcode_dir}:/transcode" in volume_targets
     assert f"{movies_dir}:/data/movies:ro" in volume_targets
     assert f"{tv_dir}:/data/tv:ro" in volume_targets
+
+    assert any("http://tailscale.plex:32400/web" in message for message in slack_messages)

@@ -7,24 +7,18 @@ process.env.PORT = process.env.PORT || "3000";
 process.env.HOST = "0.0.0.0";
 process.env.HOSTNAME = "0.0.0.0";
 
-const standaloneDir = __dirname;
-const projectRoot = path.resolve(standaloneDir, "..");
-const rootNextDir = path.join(projectRoot, ".next");
-const localNextDir = path.join(standaloneDir, ".next");
-const localStaticDir = path.join(localNextDir, "static");
+const rootDir = __dirname;
+const staticDir = path.join(rootDir, ".next", "standalone", ".next", "static");
 
-try {
-  if (!fs.existsSync(localNextDir)) {
-    fs.symlinkSync(rootNextDir, localNextDir, "dir");
-    console.log(`[next-entry] Created symlink ${localNextDir} -> ${rootNextDir}`);
-  }
-} catch (err) {
-  console.warn(`[next-entry] Failed to prepare .next symlink: ${err.message}`);
+if (!fs.existsSync(staticDir)) {
+  console.warn(
+    `[next-entry] Expected static assets at ${staticDir} but directory is missing`
+  );
 }
 
 console.log(
   `[next-entry] Environment → PORT=${process.env.PORT} HOST=${process.env.HOST} HOSTNAME=${process.env.HOSTNAME}`
 );
-console.log(`[next-entry] Static assets root: ${localStaticDir}`);
+console.log(`[next-entry] Static assets root: ${staticDir}`);
 
 require("./.next/standalone/server.js");

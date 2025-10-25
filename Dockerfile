@@ -57,10 +57,13 @@ ADD . /app
 
 # Copy frontend build artifacts
 COPY --from=frontend_build /app/frontend/.next /app/frontend/.next
-COPY --from=frontend_build /app/frontend/.next/static /app/frontend/.next/static
 COPY --from=frontend_build /app/frontend/public /app/frontend/public
 COPY --from=frontend_build /app/frontend/package.json /app/frontend/package.json
 COPY --from=frontend_build /app/frontend/server-entry.js /app/frontend/server-entry.js
+
+# Ensure Next.js standalone bundle has access to its static assets
+RUN mkdir -p /app/frontend/.next/standalone/.next \
+    && cp -r /app/frontend/.next/static /app/frontend/.next/standalone/.next/static
 
 # Sync the project
 RUN --mount=type=cache,target=/root/.cache/uv \

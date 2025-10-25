@@ -8,6 +8,7 @@ from bungalo.backups.nas import mount_smb
 from bungalo.config import BungaloConfig
 from bungalo.config.endpoints import NASEndpoint
 from bungalo.logger import CONSOLE
+from bungalo.slack import SlackClient
 
 PLEX_IMAGE = "plexinc/pms-docker:latest"
 CONTAINER_NAME = "bungalo-plex"
@@ -19,22 +20,20 @@ def _get_root() -> Path:
     return Path(os.environ.get("BUNGALO_PLEX_ROOT", "~/.bungalo/plex")).expanduser()
 
 
-def _ensure_directories() -> tuple[Path, Path, Path]:
+def _ensure_directories() -> tuple[Path, Path]:
     """
     Ensure the default directory structure required for Plex exists.
 
     Returns:
-        Tuple of (config_dir, transcode_dir, mount_root).
+        Tuple of (config_dir, mount_root).
     """
     root = _get_root()
     config_dir = root / "config"
-    transcode_dir = root / "transcode"
     mount_root = root / "mounts"
 
     config_dir.mkdir(parents=True, exist_ok=True)
-    transcode_dir.mkdir(parents=True, exist_ok=True)
     mount_root.mkdir(parents=True, exist_ok=True)
-    return (config_dir, transcode_dir, mount_root)
+    return config_dir, mount_root
 
 
 def _resolve_nas_endpoints(config: BungaloConfig) -> dict[str, NASEndpoint]:
@@ -94,16 +93,49 @@ async def main(config: BungaloConfig) -> None:
         )
 
     nas_endpoints = _resolve_nas_endpoints(config)
-    config_dir, transcode_dir, mount_root = _ensure_directories()
+    config_dir, mount_root = _ensure_directories()
 
     volume_args: list[str] = [
         "-v",
         f"{config_dir}:/config",
-        "-v",
-        f"{transcode_dir}:/transcode",
     ]
 
     with ExitStack() as stack:
+        transcode_endpoint = nas_endpoints.get(media_config.transcode.endpoint_nickname)
+        if not transcode_endpoint:
+            raise ValueError(
+                f"NAS endpoint '{media_config.transcode.endpoint_nickname}' "
+                "referenced by transcode path is not configured"
+            )
+
+        transcode_mount_point = mount_root / "transcode"
+        transcode_mount_point.mkdir(parents=True, exist_ok=True)
+
+        transcode_password = transcode_endpoint.password.get_secret_value()
+        transcode_mount = stack.enter_context(
+            mount_smb(
+                server=transcode_endpoint.ip_address,
+                share=media_config.transcode.drive_name,
+                username=transcode_endpoint.username,
+                password=transcode_password,
+                domain=transcode_endpoint.domain,
+                mount_point=transcode_mount_point,
+            )
+        )
+
+        transcode_relative = media_config.transcode.path.strip("/")
+        transcode_local_path = (
+            transcode_mount / transcode_relative if transcode_relative else transcode_mount
+        )
+        transcode_local_path.mkdir(parents=True, exist_ok=True)
+
+        volume_args.extend(
+            [
+                "-v",
+                f"{transcode_local_path}:/transcode",
+            ]
+        )
+
         for mount in media_config.mounts:
             endpoint = nas_endpoints.get(mount.path.endpoint_nickname)
             if not endpoint:
@@ -175,7 +207,14 @@ async def main(config: BungaloConfig) -> None:
             state="running",
             detail="Plex media server running",
         )
-        plex_host = os.environ.get("PLEX_EXTERNAL_HOST") or "http://127.0.0.1:32400/web"
+        plex_host = (
+            os.environ.get("PLEX_EXTERNAL_HOST")
+            or (
+                f"http://{config.root.self_ip}:32400/web"
+                if config.root.self_ip
+                else "http://127.0.0.1:32400/web"
+            )
+        )
         await slack_client.create_status(
             f"Plex is now running → {plex_host}"
         )
