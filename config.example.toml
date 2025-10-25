@@ -39,6 +39,8 @@ self_ip = "100.64.0.10"
 
 [media_server]
   plugin = "plex"
+  # optional: set externally reachable host for Slack announcements
+  external_host = "http://100.67.111.131:32400/web"
 
 [[media_server.mounts]]
   name = "movies"

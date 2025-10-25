@@ -79,6 +79,11 @@ async def main(config: BungaloConfig) -> None:
     """
     app_manager = AppManager.get()
     service_name = "plex"
+    slack_client = SlackClient(
+        app_token=config.slack.app_token,
+        bot_token=config.slack.bot_token,
+        channel_id=config.slack.channel,
+    )
 
     media_config = config.media_server
     if not media_config:
@@ -169,6 +174,10 @@ async def main(config: BungaloConfig) -> None:
             service_name,
             state="running",
             detail="Plex media server running",
+        )
+        plex_host = os.environ.get("PLEX_EXTERNAL_HOST") or "http://127.0.0.1:32400/web"
+        await slack_client.create_status(
+            f"Plex is now running → {plex_host}"
         )
         returncode = await process.wait()
 
