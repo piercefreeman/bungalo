@@ -5,9 +5,9 @@ from tomllib import loads as toml_loads
 
 from click import group
 
+from bungalo.app_manager import AppManager
 from bungalo.backups.iphoto import main as iphoto_main
 from bungalo.backups.remote import main as remote_main
-from bungalo.app_manager import AppManager
 from bungalo.config import BungaloConfig
 from bungalo.constants import DEFAULT_CONFIG_FILE
 from bungalo.dashboard import start_dashboard_services

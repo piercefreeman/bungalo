@@ -4,7 +4,6 @@ from pydantic import BaseModel
 
 from bungalo.app_manager import AppManager, TaskNotFoundError
 
-
 app = FastAPI(title="Bungalo Control Plane")
 
 app.add_middleware(

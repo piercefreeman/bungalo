@@ -1,5 +1,6 @@
 import asyncio
 import os
+import subprocess
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -36,6 +37,54 @@ def _ensure_directories() -> tuple[Path, Path]:
     config_dir.mkdir(parents=True, exist_ok=True)
     mount_root.mkdir(parents=True, exist_ok=True)
     return config_dir, mount_root
+
+
+def _cleanup_stale_mounts(mount_root: Path) -> None:
+    """
+    Clean up any stale mounts from previous container runs.
+    
+    Similar to how NUT cleans up stale PID files, we need to clean up mounts
+    that may have persisted from a previous container instance that didn't
+    shut down cleanly.
+    """
+    if not mount_root.exists():
+        return
+    
+    for mount_dir in mount_root.iterdir():
+        if not mount_dir.is_dir():
+            continue
+            
+        if mount_dir.is_mount():
+            CONSOLE.print(
+                f"Found stale mount at '{mount_dir}', cleaning up..."
+            )
+            try:
+                subprocess.run(
+                    ["umount", str(mount_dir)],
+                    check=True,
+                    capture_output=True
+                )
+                CONSOLE.print(f"Successfully unmounted '{mount_dir}'")
+            except subprocess.CalledProcessError as exc:
+                stderr = exc.stderr.decode("utf-8", errors="ignore").strip() if exc.stderr else ""
+                CONSOLE.print(
+                    f"Warning: Failed to unmount '{mount_dir}': {stderr}. "
+                    "Attempting lazy unmount..."
+                )
+                try:
+                    # Try lazy unmount as fallback
+                    subprocess.run(
+                        ["umount", "-l", str(mount_dir)],
+                        check=True,
+                        capture_output=True
+                    )
+                    CONSOLE.print(f"Successfully lazy unmounted '{mount_dir}'")
+                except subprocess.CalledProcessError:
+                    CONSOLE.print(
+                        f"Error: Could not unmount '{mount_dir}'. "
+                        "Manual cleanup may be required."
+                    )
+                    # Don't raise - continue trying to clean up other mounts
 
 
 def _resolve_nas_endpoints(config: BungaloConfig) -> dict[str, NASEndpoint]:
@@ -134,6 +183,9 @@ async def main(config: BungaloConfig) -> None:
     
     nas_endpoints = _resolve_nas_endpoints(config)
     config_dir, mount_root = _ensure_directories()
+    
+    # Clean up any stale mounts from previous runs (similar to NUT PID cleanup)
+    _cleanup_stale_mounts(mount_root)
 
     volume_args: list[str] = [
         "-v",
