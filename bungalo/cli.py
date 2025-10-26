@@ -8,6 +8,7 @@ from click import group
 from bungalo.app_manager import AppManager
 from bungalo.backups.iphoto import main as iphoto_main
 from bungalo.backups.remote import main as remote_main
+from bungalo.backups.validation import main as remote_validation_main
 from bungalo.config import BungaloConfig
 from bungalo.constants import DEFAULT_CONFIG_FILE
 from bungalo.dashboard import start_dashboard_services
@@ -61,6 +62,7 @@ async def run_all():
         battery_main(config),
         iphoto_main(config),
         remote_main(config),
+        remote_validation_main(config),
     ]
     if config.media_server and config.media_server.plugin == "jellyfin":
         tasks.append(jellyfin_main(config))

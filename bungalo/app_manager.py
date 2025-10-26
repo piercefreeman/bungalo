@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar, Dict, Optional
 
 from bungalo.logger import LOGGER
+from bungalo.system_metrics import collect_system_metrics
 
 
 def utcnow() -> datetime:
@@ -249,11 +250,19 @@ class AppManager:
                 }
                 for task in self._tasks.values()
             ]
-            return {
+            state: dict[str, Any] = {
                 "started_at": self.started_at.isoformat(),
                 "services": services,
                 "tasks": tasks,
             }
+
+        try:
+            state["system"] = await collect_system_metrics()
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            LOGGER.error("Failed to collect system metrics: %s", exc)
+            state["system"] = {"error": str(exc)}
+
+        return state
 
 
 __all__ = ["AppManager", "AppTask", "TaskState", "ServiceStatus"]
