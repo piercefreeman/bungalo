@@ -170,6 +170,31 @@ async def main(config: BungaloConfig) -> None:
                     f"Mounted path '{local_media_path}' does not exist for media mount '{mount.name}'"
                 )
 
+            preview_entries: list[str] = []
+            try:
+                for entry in local_media_path.iterdir():
+                    preview_entries.append(entry.name)
+                    if len(preview_entries) == 6:
+                        break
+            except PermissionError as exc:
+                CONSOLE.print(
+                    f"Warning: Unable to list contents of '{local_media_path}' ({exc}). "
+                    "Jellyfin mount may be empty inside the container."
+                )
+            else:
+                if not preview_entries:
+                    CONSOLE.print(
+                        f"Warning: Mounted path '{local_media_path}' appears empty. "
+                        "Double-check the NAS share and sub-path configuration."
+                    )
+                else:
+                    preview = ", ".join(preview_entries[:5])
+                    if len(preview_entries) > 5:
+                        preview += ", ..."
+                    CONSOLE.print(
+                        f"Mounted path '{local_media_path}' contains entries: {preview}"
+                    )
+
             volume_spec = f"{local_media_path}:{container_path}:ro"
             volume_args.extend(["-v", volume_spec])
             CONSOLE.print(
