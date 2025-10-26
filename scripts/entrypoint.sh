@@ -7,10 +7,8 @@ set -e
 echo "Starting Docker daemon for Docker-in-Docker..."
 
 # Start Docker daemon in the background
-dockerd \
-    --host=unix:///var/run/docker.sock \
-    --storage-driver=vfs \
-    >/var/log/dockerd.log 2>&1 &
+# Configuration is loaded from /etc/docker/daemon.json
+dockerd >/var/log/dockerd.log 2>&1 &
 
 DOCKERD_PID=$!
 echo "Docker daemon started with PID $DOCKERD_PID"
