@@ -156,7 +156,7 @@ async def test_sync_all_invokes_rclone_and_mount(
     patched_run[1].assert_called_once()
     args, _ = patched_run[1].call_args
     cmd = args[:5]
-    assert cmd[0:2] == ("rclone", "sync")
+    assert cmd[0:2] == ("rclone", "copy")
 
 
 @pytest.mark.asyncio

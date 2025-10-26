@@ -53,6 +53,13 @@ def mount_smb(
 
     mount_dir.mkdir(parents=True, exist_ok=True)
 
+    share_display = share or "(root)"
+    CONSOLE.print(
+        f"Attempting to mount SMB share '//{server}/{share_display}' at '{mount_dir}'"
+    )
+
+    mounted = False
+
     try:
         # Prepare mount options for Linux
         options_str = "vers=3.0"  # Default to SMB3 protocol
@@ -83,14 +90,33 @@ def mount_smb(
             options_str,
         ]
         subprocess.run(cmd, check=True, capture_output=True)
+        mounted = True
+        CONSOLE.print(
+            f"Mounted SMB share '//{server}/{share_display}' at '{mount_dir}'"
+        )
 
         # Yield the mount point
         yield mount_dir
 
+    except subprocess.CalledProcessError as exc:
+        stdout = (
+            exc.stdout.decode("utf-8", errors="ignore").strip() if exc.stdout else ""
+        )
+        stderr = (
+            exc.stderr.decode("utf-8", errors="ignore").strip() if exc.stderr else ""
+        )
+        detail = stderr or stdout or str(exc)
+        CONSOLE.print(
+            f"Error mounting SMB share '//{server}/{share_display}' at '{mount_dir}': {detail}"
+        )
+        raise
     finally:
         # Unmount and clean up
         try:
-            if mount_dir.is_mount():
+            if mounted and mount_dir.is_mount():
                 subprocess.run(["umount", str(mount_dir)], check=True)
+                CONSOLE.print(
+                    f"Unmounted SMB share '//{server}/{share_display}' from '{mount_dir}'"
+                )
         except Exception as e:
             CONSOLE.print(f"Warning: Failed to unmount {mount_dir}: {e}")

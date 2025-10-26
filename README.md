@@ -55,11 +55,46 @@ The `SSHManager` manages a local bungalo ssh credential that we place into the b
 
 To configure the server behavior, add a config file to: `~/.bungalo/config.toml`. See `config.example.toml` for the expected format.
 
+If you access the dashboard over a different interface (for example, through Tailscale), set the optional `root.self_ip` field so Slack links point at a reachable address:
+
+```toml
+[root]
+self_ip = "100.68.0.12"
+```
+
 ### Slack Integration
 
-We ping Slack after successful syncs, when there are power failures, etc. We also use channels as the IO interface for receiving 2FA codes when we need to get additional permission from the user.
+We still ping Slack after successful syncs and outages, but interactive prompts (like iCloud 2FA) now flow through the Bungalo dashboard. When a task needs input we post a deep link back to the dashboard instead of collecting replies in-channel. The `slack_manifest.json` captures the current configuration of our private Slack app.
 
-The `slack_manifest.json` captures the current configuration of our private slack app.
+### Dashboard
+
+Launching `bungalo run-all` now boots two companion services:
+
+- A FastAPI control plane (`bungalo/web_server.py`) that surfaces runtime state and accepts task responses.
+- A Next.js dashboard in `frontend/` powered by shadcn components for a monochrome, serif UI.
+
+Make sure Node.js is available and install dependencies once:
+
+```bash
+cd frontend
+npm install
+```
+
+Environment variables allow overrides, but by default the API listens on `0.0.0.0:5006` and the dashboard on `0.0.0.0:80`.
+
+Set `[root].self_ip` (or export `BUNGALO_EXTERNAL_HOST`) if you want Slack links and the dashboard itself to use a Tailscale or other reachable address; both FastAPI and Next.js bind to `0.0.0.0` inside the container, so advertising the correct hostname ensures browsers connect to the right place.
+
+### Media Server
+
+Define NAS shares that should be exposed to Jellyfin via the `media_server` configuration block. Bungalo will mount each NAS share and launch the Jellyfin container on demand:
+
+```bash
+bungalo jellyfin
+```
+
+Mounts are published to the container as read-only volumes so Jellyfin can index them without modifying source data. Provide a NAS-backed `transcode` path (writeable) so temporary transcoding artifacts land off-box; we mount it inside the container at `/cache`. We derive the Slack announcement URL from `[root].self_ip`, falling back to localhost if unset.
+
+**Architecture:** Jellyfin runs via Docker-in-Docker (DinD). When the Bungalo container starts, it launches an inner Docker daemon that Jellyfin uses. This allows Jellyfin to access the NAS shares that Bungalo mounts (via SMB/FUSE) inside the container, solving the sibling-container volume mounting problem. The inner Docker daemon uses the `vfs` storage driver for simplicity and runs in privileged mode.
 
 ## Future Work
 
@@ -106,10 +141,12 @@ make test -- -k test_fully_parameterized_config
    ```
 
    The flags explained:
-   - `--privileged`: Required for USB device access
+   - `--privileged`: Required for USB device access and Docker-in-Docker
    - `--network host`: Allows direct access to host network for SSH operations
+   - `-v /var/run/docker.sock:/var/run/docker.sock`: **No longer needed** - we use Docker-in-Docker for Jellyfin instead of the host daemon
    - `-v ~/.bungalo:/root/.bungalo`: Mounts your config directory
    - `-v /dev/bus/usb:/dev/bus/usb`: Mounts USB devices
+   - `--cap-add=SYS_ADMIN` and `--device /dev/fuse`: Required for FUSE mounts (NAS shares)
 
 4. Sometimes you'll need to diagnose USB permissions from within Docker. Run with an interactive session:
 
@@ -124,3 +161,11 @@ make test -- -k test_fully_parameterized_config
         --device /dev/fuse \
         -it bungalo /bin/bash
     ```
+
+   Note: The Docker-in-Docker daemon will start automatically via `/entrypoint.sh`. If you want to manually run commands, you can start the daemon with:
+   
+   ```bash
+   dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs &
+   # Wait a few seconds for it to be ready
+   docker ps  # Should work once daemon is running
+   ```

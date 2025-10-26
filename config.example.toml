@@ -1,5 +1,6 @@
 [root]
-slack_webhook_url = "https://hooks.slack.com/..."
+# Optional: advertise a specific IP (e.g. Tailscale) for dashboard links
+self_ip = "100.64.0.10"
 
 [nut]
   shutdown_threshold = 20  # Shutdown clients when battery below 20%
@@ -23,7 +24,7 @@ slack_webhook_url = "https://hooks.slack.com/..."
   password = "password"
 
 [[endpoints.b2]]
-  nickname = "b2-us
+  nickname = "b2-us"
   key_id = ""
   application_key = ""
 
@@ -35,3 +36,16 @@ slack_webhook_url = "https://hooks.slack.com/..."
   username = "your_username"
   password = "your_password"
   output_directory = "iphoto"
+
+[media_server]
+  plugin = "jellyfin"
+  transcode = "nas:unifi-nas://Media/Transcode"
+
+[[media_server.mounts]]
+  name = "movies"
+  path = "nas:unifi-nas://Media/Movies"
+  container_path = "/data/movies"
+
+[[media_server.mounts]]
+  name = "tv"
+  path = "nas:unifi-nas://Media/TV"

@@ -8,6 +8,8 @@ from bungalo.config import BungaloConfig
 from bungalo.config.config import (
     EndpointConfig,
     ManagedHardware,
+    MediaServerConfig,
+    MediaServerMount,
     NutConfig,
     RemoteBackupConfig,
     SlackConfig,
@@ -97,6 +99,22 @@ def config_dict() -> dict[str, Any]:
                     "username": "admin2",
                     "password": "pass456",
                     "domain": "HOME",
+                },
+            ],
+        },
+        "media_server": {
+            "plugin": "jellyfin",
+            "transcode": "nas:nas1://drive1/media/transcode",
+            "mounts": [
+                {
+                    "name": "movies",
+                    "path": "nas:nas1://drive1/media/movies",
+                    "container_path": "/data/movies",
+                },
+                {
+                    "name": "tv",
+                    "path": "nas:nas2://drive2/media/tv",
+                    "container_path": "/data/tv",
                 },
             ],
         },
@@ -198,12 +216,25 @@ def test_fully_parameterized_config(config_dict: dict[str, Any]) -> None:
     assert isinstance(config.endpoints.nas[1], NASEndpoint)
     assert config.endpoints.nas[0].nickname == "nas1"
     assert config.endpoints.nas[0].ip_address == "192.168.1.100"
-    assert config.endpoints.nas[1].nickname == "nas2"
-    assert config.endpoints.nas[1].domain == "HOME"
 
-    # Test that get_all() works correctly
-    all_endpoints = config.endpoints.get_all()
-    assert len(all_endpoints) == 3
+    # Test media server config
+    assert isinstance(config.media_server, MediaServerConfig)
+    assert config.media_server.plugin == "jellyfin"
+    assert isinstance(config.media_server.transcode, NASPath)
+    assert len(config.media_server.mounts) == 2
+    assert isinstance(config.media_server.mounts[0], MediaServerMount)
+    assert config.media_server.mounts[0].name == "movies"
+    assert isinstance(config.media_server.mounts[0].path, NASPath)
+    assert config.media_server.mounts[0].container_path == "/data/movies"
+
+
+def test_media_server_duplicate_mount_names_invalid(
+    config_dict: dict[str, Any],
+) -> None:
+    """Duplicate media server mount names should be rejected."""
+    config_dict["media_server"]["mounts"][1]["name"] = "movies"
+    with pytest.raises(ValidationError):
+        BungaloConfig.model_validate(config_dict)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

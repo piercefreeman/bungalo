@@ -1,13 +1,14 @@
 import asyncio
 import contextlib
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from traceback import format_exc
-from typing import Generator, Sequence, assert_never
+from typing import Awaitable, Callable, Generator, Sequence, assert_never
 
 from pydantic import BaseModel, Field, IPvAnyAddress, ValidationError, model_validator
 
+from bungalo.app_manager import AppManager
 from bungalo.config.config import BungaloConfig, SyncPair
 from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint
 from bungalo.config.paths import B2Path, FileLocation, FilePath, NASPath
@@ -101,14 +102,20 @@ class RCloneSync:
         pairs: list[SyncPair],
         slack_client: SlackClient,
         progress_interval: int = 30,
-        custom_rclone_args: list[str] = [],
+        custom_rclone_args: list[str] | None = None,
+        status_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.config_path = config_path
         self.endpoints = endpoints
         self.pairs = pairs
         self.slack_client = slack_client
         self.progress_interval = progress_interval
-        self.custom_rclone_args = custom_rclone_args
+        self.custom_rclone_args = custom_rclone_args or []
+        self.status_callback = status_callback
+
+    async def _emit_status(self, detail: str) -> None:
+        if self.status_callback:
+            await self.status_callback(detail)
 
     async def write_config(self) -> None:
         config_lines = []
@@ -162,10 +169,12 @@ class RCloneSync:
         self.config_path.write_text("".join(f"{line}\n" for line in config_lines))
         CONSOLE.print(f"rclone config written → {self.config_path}")
 
-    async def sync_all(self) -> None:
+    async def sync_all(self) -> bool:
+        encountered_error = False
         for pair in self.pairs:
             try:
                 with self._pair_context(pair) as (resolved_src, resolved_dst):
+                    await self._emit_status(f"Syncing {resolved_src} → {resolved_dst}")
                     core_status = await self._alert(
                         f"Syncing {resolved_src} → {resolved_dst}"
                     )
@@ -178,6 +187,10 @@ class RCloneSync:
             except Exception as exc:
                 CONSOLE.print(f"Traceback: {format_exc()}")
                 await self._alert(f"Sync {pair.src} → {pair.dst} failed: {exc}")
+                await self._emit_status(f"Sync failed: {exc}")
+                encountered_error = True
+        await self._emit_status("All sync pairs completed")
+        return not encountered_error
 
     @contextmanager
     def _pair_context(self, pair: SyncPair) -> Generator[tuple[str, str], None, None]:
@@ -209,7 +222,7 @@ class RCloneSync:
     async def _run_sync(self, src: str, dst: str, update_status: SlackMessage) -> None:
         process = await asyncio.create_subprocess_exec(
             "rclone",
-            "sync",
+            "copy",
             "--config",
             str(self.config_path),
             src,
@@ -311,6 +324,17 @@ async def main(config: BungaloConfig) -> None:
     endpoints_by_nickname = validate_endpoints(config.endpoints.get_all())
     sync_pairs = [SyncPair.model_validate(raw_pair) for raw_pair in config.backups.sync]
 
+    app_manager = AppManager.get()
+    service_name = "remote_sync"
+    interval_seconds = config.backups.interval.total_seconds()
+
+    async def update_detail(detail: str) -> None:
+        await app_manager.update_service(
+            service_name,
+            state="running",
+            detail=detail,
+        )
+
     rclone_sync = RCloneSync(
         config_path=Path(DEFAULT_RCLONE_CONFIG_FILE).expanduser(),
         endpoints=endpoints_by_nickname,
@@ -320,16 +344,56 @@ async def main(config: BungaloConfig) -> None:
             bot_token=config.slack.bot_token,
             channel_id=config.slack.channel,
         ),
+        status_callback=update_detail,
     )
     await rclone_sync.write_config()
 
+    await app_manager.update_service(
+        service_name,
+        state="idle",
+        detail="Waiting to start remote backups",
+        next_run_at=datetime.now(timezone.utc),
+    )
+
     while True:
+        start_time = datetime.now(timezone.utc)
+        await app_manager.update_service(
+            service_name,
+            state="running",
+            detail="Preparing remote backup jobs",
+            last_run_at=start_time,
+        )
         try:
-            await rclone_sync.sync_all()
+            success = await rclone_sync.sync_all()
+            completed_at = datetime.now(timezone.utc)
+            if success:
+                await app_manager.update_service(
+                    service_name,
+                    state="idle",
+                    detail="Remote backups completed successfully",
+                    last_run_at=completed_at,
+                    next_run_at=completed_at + config.backups.interval,
+                )
+            else:
+                await app_manager.update_service(
+                    service_name,
+                    state="error",
+                    detail="Remote backups completed with errors",
+                    last_run_at=completed_at,
+                    next_run_at=completed_at + config.backups.interval,
+                )
         except Exception as exc:
             CONSOLE.print(f"Sync failed: {exc}")
             if rclone_sync.slack_client:
                 await rclone_sync.slack_client.create_status(
                     f"Sync round failed: {exc}"
                 )
-        await asyncio.sleep(config.backups.interval.total_seconds())
+            completed_at = datetime.now(timezone.utc)
+            await app_manager.update_service(
+                service_name,
+                state="error",
+                detail=f"Remote backup crashed: {exc}",
+                last_run_at=completed_at,
+                next_run_at=completed_at + config.backups.interval,
+            )
+        await asyncio.sleep(interval_seconds)

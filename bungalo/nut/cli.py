@@ -3,6 +3,7 @@ import sys
 from datetime import timedelta
 from traceback import format_exc
 
+from bungalo.app_manager import AppManager
 from bungalo.config import BungaloConfig
 from bungalo.constants import NUT_SERVER_PORT
 from bungalo.logger import CONSOLE, LOGGER
@@ -27,23 +28,64 @@ async def main(config: BungaloConfig):
         bot_token=config.slack.bot_token,
         channel_id=config.slack.channel,
     )
+    app_manager = AppManager.get()
+    service_name = "nut_monitor"
+
+    await app_manager.update_service(
+        service_name,
+        state="running",
+        detail="Initializing UPS monitoring service",
+    )
 
     # Run bootstrap, poll, and healthcheck tasks concurrently
     if sys.platform == "linux":
         await asyncio.gather(
-            bootstrap_task(slack_client, config.nut.bootstrap_retry_interval),
-            poll_task(client_manager, slack_client, config),
-            healthcheck_task(client_manager, slack_client),
+            bootstrap_task(
+                slack_client,
+                config.nut.bootstrap_retry_interval,
+                app_manager=app_manager,
+                service_name=service_name,
+            ),
+            poll_task(
+                client_manager,
+                slack_client,
+                config,
+                app_manager=app_manager,
+                service_name=service_name,
+            ),
+            healthcheck_task(
+                client_manager,
+                slack_client,
+                app_manager=app_manager,
+                service_name=service_name,
+            ),
         )
     else:
         # Skip bootstrap on non-Linux platforms
         await asyncio.gather(
-            poll_task(client_manager, slack_client, config),
-            healthcheck_task(client_manager, slack_client),
+            poll_task(
+                client_manager,
+                slack_client,
+                config,
+                app_manager=app_manager,
+                service_name=service_name,
+            ),
+            healthcheck_task(
+                client_manager,
+                slack_client,
+                app_manager=app_manager,
+                service_name=service_name,
+            ),
         )
 
 
-async def bootstrap_task(slack_client: SlackClient, retry_interval: timedelta):
+async def bootstrap_task(
+    slack_client: SlackClient,
+    retry_interval: timedelta,
+    *,
+    app_manager: AppManager | None = None,
+    service_name: str = "nut_monitor",
+):
     """
     Continuously attempt to bootstrap NUT with retry logic.
 
@@ -60,6 +102,12 @@ async def bootstrap_task(slack_client: SlackClient, retry_interval: timedelta):
                 await slack_client.create_status(
                     "✅ NUT bootstrap completed successfully"
                 )
+                if app_manager:
+                    await app_manager.update_service(
+                        service_name,
+                        state="running",
+                        detail="NUT bootstrap completed successfully",
+                    )
                 bootstrap_successful = True
                 LOGGER.info("NUT bootstrap successful, monitoring for failures...")
             except Exception as e:
@@ -67,6 +115,12 @@ async def bootstrap_task(slack_client: SlackClient, retry_interval: timedelta):
                 CONSOLE.print(f"[red]{error_msg}[/red]")
                 LOGGER.error(f"{error_msg}\n{format_exc()}")
                 await slack_client.create_status(f"❌ {error_msg}")
+                if app_manager:
+                    await app_manager.update_service(
+                        service_name,
+                        state="error",
+                        detail=error_msg,
+                    )
                 LOGGER.info(
                     f"Retrying NUT bootstrap in {retry_interval.total_seconds()} seconds..."
                 )
@@ -86,6 +140,12 @@ async def bootstrap_task(slack_client: SlackClient, retry_interval: timedelta):
                 continue
         except Exception as e:
             LOGGER.error(f"Error checking NUT status: {e}")
+            if app_manager:
+                await app_manager.update_service(
+                    service_name,
+                    state="error",
+                    detail=f"NUT status check failed: {e}",
+                )
             bootstrap_successful = False
             continue
 
@@ -97,6 +157,9 @@ async def poll_task(
     client_manager: ClientManager,
     slack_client: SlackClient,
     config: BungaloConfig,
+    *,
+    app_manager: AppManager | None = None,
+    service_name: str = "nut_monitor",
 ):
     # Wait for NUT to be available before starting to poll
     LOGGER.info("Waiting for NUT to be available before starting polling...")
@@ -104,6 +167,12 @@ async def poll_task(
         try:
             if await check_nut_status():
                 LOGGER.info("NUT is available, starting UPS monitoring...")
+                if app_manager:
+                    await app_manager.update_service(
+                        service_name,
+                        state="running",
+                        detail="Monitoring UPS telemetry",
+                    )
                 break
         except Exception as e:
             LOGGER.debug(f"NUT not yet available: {e}")
@@ -120,6 +189,16 @@ async def poll_task(
             # Handle battery thresholds for client machines
             if status.battery_charge is None:
                 continue
+
+            if app_manager:
+                human_power = (
+                    "On battery" if status.statuses.is_on_battery() else "On AC"
+                )
+                await app_manager.update_service(
+                    service_name,
+                    state="running",
+                    detail=f"Battery {status.battery_charge}% · {human_power}",
+                )
 
             # Send a slack message
             if not clients_shutdown and status.statuses.is_on_battery():
@@ -154,12 +233,23 @@ async def poll_task(
         error_msg = f"UPS polling encountered an error: {e}"
         LOGGER.error(f"{error_msg}\n{format_exc()}")
         await slack_client.create_status(f"❌ {error_msg}")
+        if app_manager:
+            await app_manager.update_service(
+                service_name,
+                state="error",
+                detail=error_msg,
+            )
         # The poll method already has retry logic, so this shouldn't normally happen
         # but if it does, the entire main() function will restart
 
 
 async def healthcheck_task(
-    client_manager: ClientManager, slack_client: SlackClient, interval: int = 5 * 60
+    client_manager: ClientManager,
+    slack_client: SlackClient,
+    *,
+    app_manager: AppManager | None = None,
+    service_name: str = "nut_monitor",
+    interval: int = 5 * 60,
 ):
     while True:
         results = await client_manager.healthcheck()
@@ -168,4 +258,10 @@ async def healthcheck_task(
             await slack_client.create_status(
                 f"Failed to connect to {', '.join(failed_clients)}"
             )
+            if app_manager:
+                await app_manager.update_service(
+                    service_name,
+                    state="warning",
+                    detail=f"Unreachable clients: {', '.join(failed_clients)}",
+                )
         await asyncio.sleep(interval)
