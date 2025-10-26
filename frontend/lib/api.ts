@@ -26,8 +26,22 @@ export interface AppState {
   tasks: TaskState[];
 }
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") || "http://localhost:5006";
+function resolveApiBase(): string {
+  const configured = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "");
+  if (configured) {
+    return configured;
+  }
+
+  if (typeof window !== "undefined") {
+    const { protocol, hostname } = window.location;
+    const host = hostname.includes(":") ? `[${hostname}]` : hostname;
+    return `${protocol}//${host}:5006`;
+  }
+
+  return "http://127.0.0.1:5006";
+}
+
+const API_BASE = resolveApiBase();
 
 export async function loadState(): Promise<AppState> {
   const res = await fetch(`${API_BASE}/api/state`, { cache: "no-store" });
