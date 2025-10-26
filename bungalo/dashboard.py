@@ -54,7 +54,7 @@ async def run_nextjs(
         )
         return
 
-    next_port = port or _get_int_env("BUNGALO_NEXT_PORT", 3000)
+    next_port = port or _get_int_env("BUNGALO_NEXT_PORT", 8000)
     external_host = os.environ.get("BUNGALO_EXTERNAL_HOST")
     api_host = os.environ.get("BUNGALO_API_HOST", "127.0.0.1")
     public_host = external_host or api_host

@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 
-process.env.PORT = process.env.PORT || "3000";
+process.env.PORT = process.env.PORT || "8000";
 process.env.HOST = "0.0.0.0";
 process.env.HOSTNAME = "0.0.0.0";
 
