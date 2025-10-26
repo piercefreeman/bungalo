@@ -15,10 +15,6 @@ const config: Config = {
       },
     },
     extend: {
-      fontFamily: {
-        serif: ["var(--font-serif)", "Playfair Display", "Georgia", "Cambria", "Times New Roman", "serif"],
-        sans: ["var(--font-sans)", "Inter", "system-ui", "sans-serif"],
-      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

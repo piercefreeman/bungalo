@@ -63,31 +63,31 @@ function ServicesTable({ services }: { services: ServiceStatus[] }) {
       </div>
       <Card className="overflow-hidden">
         <Table>
-          <TableHeader className="bg-muted/30">
-            <TableRow className="hover:bg-muted/30">
-              <TableHead className="px-8 py-4 text-xs font-semibold uppercase tracking-wider">Service</TableHead>
-              <TableHead className="px-8 py-4 text-xs font-semibold uppercase tracking-wider">Status</TableHead>
-              <TableHead className="px-8 py-4 text-xs font-semibold uppercase tracking-wider">Detail</TableHead>
-              <TableHead className="px-8 py-4 text-xs font-semibold uppercase tracking-wider">Next Run</TableHead>
-              <TableHead className="px-8 py-4 text-xs font-semibold uppercase tracking-wider">Last Run</TableHead>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Service</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Detail</TableHead>
+              <TableHead>Next Run</TableHead>
+              <TableHead>Last Run</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {services.map((service) => (
               <TableRow key={service.name}>
-                <TableCell className="px-8 py-4 font-semibold">
+                <TableCell className="font-semibold">
                   {titleCase(service.name)}
                 </TableCell>
-                <TableCell className="px-8 py-4">
+                <TableCell>
                   <StatusBadge state={service.state} />
                 </TableCell>
-                <TableCell className="px-8 py-4 max-w-md text-muted-foreground">
+                <TableCell className="max-w-md text-muted-foreground">
                   {service.detail || "—"}
                 </TableCell>
-                <TableCell className="px-8 py-4 text-muted-foreground">
+                <TableCell className="text-muted-foreground">
                   {formatDateTime(service.next_run_at)}
                 </TableCell>
-                <TableCell className="px-8 py-4 text-muted-foreground">
+                <TableCell className="text-muted-foreground">
                   {formatDateTime(service.last_run_at)}
                 </TableCell>
               </TableRow>
