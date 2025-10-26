@@ -92,7 +92,9 @@ Define NAS shares that should be exposed to Jellyfin via the `media_server` conf
 bungalo jellyfin
 ```
 
-Mounts are published to the container as read-only volumes so Jellyfin can index them without modifying source data. Provide a NAS-backed `transcode` path (writeable) so temporary transcoding artifacts land off-box; we mount it inside the container at `/cache`. We derive the Slack announcement URL from `[root].self_ip`, falling back to localhost if unset. We launch a Jellyfin docker container of its own in order to provide a proper amount of isolation from our encryption credentials.
+Mounts are published to the container as read-only volumes so Jellyfin can index them without modifying source data. Provide a NAS-backed `transcode` path (writeable) so temporary transcoding artifacts land off-box; we mount it inside the container at `/cache`. We derive the Slack announcement URL from `[root].self_ip`, falling back to localhost if unset.
+
+**Architecture:** Jellyfin runs via Docker-in-Docker (DinD). When the Bungalo container starts, it launches an inner Docker daemon that Jellyfin uses. This allows Jellyfin to access the NAS shares that Bungalo mounts (via SMB/FUSE) inside the container, solving the sibling-container volume mounting problem. The inner Docker daemon uses the `vfs` storage driver for simplicity and runs in privileged mode.
 
 ## Future Work
 
@@ -131,7 +133,6 @@ make test -- -k test_fully_parameterized_config
      --privileged \
      --network host \
      --device=/dev/bus/usb \
-     -v /var/run/docker.sock:/var/run/docker.sock \
      -v ~/.bungalo:/root/.bungalo \
      -v /dev/bus/usb:/dev/bus/usb \
      --cap-add=SYS_ADMIN \
@@ -140,11 +141,12 @@ make test -- -k test_fully_parameterized_config
    ```
 
    The flags explained:
-   - `--privileged`: Required for USB device access
+   - `--privileged`: Required for USB device access and Docker-in-Docker
    - `--network host`: Allows direct access to host network for SSH operations
-   - `-v /var/run/docker.sock:/var/run/docker.sock`: Grants Bungalo access to launch Jellyfin containers via the host Docker daemon
+   - `-v /var/run/docker.sock:/var/run/docker.sock`: **No longer needed** - we use Docker-in-Docker for Jellyfin instead of the host daemon
    - `-v ~/.bungalo:/root/.bungalo`: Mounts your config directory
    - `-v /dev/bus/usb:/dev/bus/usb`: Mounts USB devices
+   - `--cap-add=SYS_ADMIN` and `--device /dev/fuse`: Required for FUSE mounts (NAS shares)
 
 4. Sometimes you'll need to diagnose USB permissions from within Docker. Run with an interactive session:
 
@@ -153,10 +155,17 @@ make test -- -k test_fully_parameterized_config
         --privileged \
         --network host \
         --device=/dev/bus/usb \
-        -v /var/run/docker.sock:/var/run/docker.sock \
         -v ~/.bungalo:/root/.bungalo \
         -v /dev/bus/usb:/dev/bus/usb \
         --cap-add=SYS_ADMIN \
         --device /dev/fuse \
         -it bungalo /bin/bash
     ```
+
+   Note: The Docker-in-Docker daemon will start automatically via `/entrypoint.sh`. If you want to manually run commands, you can start the daemon with:
+   
+   ```bash
+   dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs &
+   # Wait a few seconds for it to be ready
+   docker ps  # Should work once daemon is running
+   ```

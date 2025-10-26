@@ -12,13 +12,13 @@ sudo modprobe cifs
 docker rm -f bungalo || true
 
 # Run the new container
+# Note: We use Docker-in-Docker for Jellyfin, so no need to mount /var/run/docker.sock
 docker run -d \
      --name bungalo \
      --restart=always \
      --privileged \
      --network host \
      --device=/dev/bus/usb \
-     -v /var/run/docker.sock:/var/run/docker.sock \
      --cap-add=SYS_ADMIN \
      --device /dev/fuse \
      -v ~/.bungalo:/root/.bungalo \

@@ -14,6 +14,7 @@ from bungalo.slack import SlackClient
 JELLYFIN_IMAGE = "jellyfin/jellyfin:latest"
 CONTAINER_NAME = "bungalo-jellyfin"
 ENV_PASSTHROUGH = ("JELLYFIN_UID", "JELLYFIN_GID")
+DOCKER_READY_TIMEOUT = 60  # seconds
 
 
 def _get_root() -> Path:
@@ -42,6 +43,39 @@ def _resolve_nas_endpoints(config: BungaloConfig) -> dict[str, NASEndpoint]:
     if not endpoints_by_nickname:
         raise ValueError("No NAS endpoints configured, cannot mount media shares")
     return endpoints_by_nickname
+
+
+async def _ensure_docker_ready() -> None:
+    """
+    Ensure the inner Docker daemon is ready to accept commands.
+    
+    The entrypoint script should have already started dockerd, but this provides
+    an additional safety check in case jellyfin is run independently.
+    """
+    CONSOLE.print("Verifying Docker daemon is ready...")
+    
+    for attempt in range(DOCKER_READY_TIMEOUT):
+        process = await asyncio.create_subprocess_exec(
+            "docker",
+            "info",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        returncode = await process.wait()
+        
+        if returncode == 0:
+            CONSOLE.print("Docker daemon is ready!")
+            return
+        
+        if attempt == 0:
+            CONSOLE.print("Docker daemon not yet ready, waiting...")
+        
+        await asyncio.sleep(1)
+    
+    raise RuntimeError(
+        f"Docker daemon not ready after {DOCKER_READY_TIMEOUT}s. "
+        "Ensure the container is running with --privileged and dockerd is started."
+    )
 
 
 async def _remove_existing_container() -> None:
@@ -73,6 +107,11 @@ def _build_env_args(media_config: MediaServerConfig) -> list[str]:
 async def main(config: BungaloConfig) -> None:
     """
     Launch the Jellyfin media server container after mounting configured NAS paths.
+    
+    This function runs Jellyfin via Docker-in-Docker: the inner Docker daemon
+    (started by our entrypoint script) spawns the Jellyfin container. Because
+    Jellyfin runs inside our container's Docker daemon, it can access our mounted
+    NAS shares via volume mounts.
     """
     app_manager = AppManager.get()
     service_name = "jellyfin"
@@ -90,6 +129,9 @@ async def main(config: BungaloConfig) -> None:
             f"Unsupported media server plugin '{media_config.plugin}', expected 'jellyfin'"
         )
 
+    # Ensure Docker daemon is ready for Docker-in-Docker
+    await _ensure_docker_ready()
+    
     nas_endpoints = _resolve_nas_endpoints(config)
     config_dir, mount_root = _ensure_directories()
 

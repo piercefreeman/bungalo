@@ -20,6 +20,8 @@ RUN apt-get update && apt-get install -y \
     rclone \
     procps \
     docker.io \
+    iptables \
+    supervisor \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Node runtime from build stage
@@ -72,8 +74,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Create necessary directories
 RUN mkdir -p /root/.bungalo
 
+# Set up Docker-in-Docker
+# Create directory for Docker daemon data
+RUN mkdir -p /var/lib/docker
+
+# Configure Docker daemon for DinD
+RUN mkdir -p /etc/docker && \
+    echo '{"storage-driver": "vfs", "hosts": ["unix:///var/run/docker.sock"]}' > /etc/docker/daemon.json
+
+# Create startup script that launches Docker daemon then Bungalo
+COPY scripts/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV DOCKER_HOST=unix:///var/run/docker.sock
 
-# Run all background processes
-CMD ["uv", "run", "bungalo", "run-all"]
+# Run entrypoint script
+CMD ["/entrypoint.sh"]
