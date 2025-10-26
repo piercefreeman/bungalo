@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from bungalo.config import BungaloConfig
-from bungalo.plugins import plex
+from bungalo.plugins import jellyfin
 
 
 class DummyProcess:
@@ -17,7 +17,7 @@ class DummyProcess:
 
 
 @pytest.mark.asyncio
-async def test_plex_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+async def test_jellyfin_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     commands: list[tuple[Any, ...]] = []
 
     async def fake_create_subprocess_exec(*args, **kwargs):
@@ -47,14 +47,14 @@ async def test_plex_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, tmp_
             slack_messages.append(text)
             return None
 
-    monkeypatch.setenv("BUNGALO_PLEX_ROOT", str(tmp_path / "plex"))
+    monkeypatch.setenv("BUNGALO_JELLYFIN_ROOT", str(tmp_path / "jellyfin"))
     monkeypatch.delenv("TZ", raising=False)
-    monkeypatch.setattr(plex.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-    monkeypatch.setattr(plex, "mount_smb", fake_mount_smb)
-    monkeypatch.setattr(plex, "SlackClient", DummySlackClient)
+    monkeypatch.setattr(jellyfin.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(jellyfin, "mount_smb", fake_mount_smb)
+    monkeypatch.setattr(jellyfin, "SlackClient", DummySlackClient)
 
     config_dict = {
-        "root": {"self_ip": "tailscale.plex"},
+        "root": {"self_ip": "tailscale.jellyfin"},
         "slack": {
             "app_token": "app",
             "bot_token": "bot",
@@ -64,26 +64,26 @@ async def test_plex_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, tmp_
         "endpoints": {
             "nas": [
                 {
-                    "nickname": "plex-nas",
+                    "nickname": "jellyfin-nas",
                     "ip_address": "192.168.1.50",
-                    "username": "plex",
+                    "username": "jellyfin",
                     "password": "secret",
                     "domain": "WORKGROUP",
                 }
             ]
         },
         "media_server": {
-            "plugin": "plex",
-            "transcode": "nas:plex-nas://share_transcode/Transcode",
+            "plugin": "jellyfin",
+            "transcode": "nas:jellyfin-nas://share_transcode/Transcode",
             "mounts": [
                 {
                     "name": "movies",
-                    "path": "nas:plex-nas://share_movies/Movies",
-                    "container_path": "/data/movies",
+                    "path": "nas:jellyfin-nas://share_movies/Movies",
+                    "container_path": "/media/movies",
                 },
                 {
                     "name": "tv",
-                    "path": "nas:plex-nas://share_tv/Shows",
+                    "path": "nas:jellyfin-nas://share_tv/Shows",
                 },
             ],
         },
@@ -91,30 +91,28 @@ async def test_plex_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, tmp_
 
     config = BungaloConfig.model_validate(config_dict)
 
-    await plex.main(config)
+    await jellyfin.main(config)
 
     # Two docker commands should be executed: rm -f and run
     assert len(commands) == 2
     run_cmd = commands[-1]
     assert run_cmd[0:2] == ("docker", "run")
-    assert plex.PLEX_IMAGE in run_cmd
+    assert jellyfin.JELLYFIN_IMAGE in run_cmd
     assert "-e" in run_cmd and "TZ=UTC" in run_cmd
 
     # Validate expected volume mounts are present
-    # run_cmd structure: "-v", "<path>", "-v", "<path>", ...
-    # Gather paired values
     volume_targets = [
         run_cmd[idx + 1] for idx, val in enumerate(run_cmd) if val == "-v"
     ]
 
-    config_dir = Path(tmp_path / "plex" / "config")
-    transcode_dir = Path(tmp_path / "plex" / "mounts" / "transcode" / "Transcode")
-    movies_dir = Path(tmp_path / "plex" / "mounts" / "movies" / "Movies")
-    tv_dir = Path(tmp_path / "plex" / "mounts" / "tv" / "Shows")
+    config_dir = Path(tmp_path / "jellyfin" / "config")
+    transcode_dir = Path(tmp_path / "jellyfin" / "mounts" / "transcode" / "Transcode")
+    movies_dir = Path(tmp_path / "jellyfin" / "mounts" / "movies" / "Movies")
+    tv_dir = Path(tmp_path / "jellyfin" / "mounts" / "tv" / "Shows")
 
     assert f"{config_dir}:/config" in volume_targets
-    assert f"{transcode_dir}:/transcode" in volume_targets
-    assert f"{movies_dir}:/data/movies:ro" in volume_targets
+    assert f"{transcode_dir}:/cache" in volume_targets
+    assert f"{movies_dir}:/media/movies:ro" in volume_targets
     assert f"{tv_dir}:/data/tv:ro" in volume_targets
 
-    assert any("http://tailscale.plex:32400/web" in message for message in slack_messages)
+    assert any("http://tailscale.jellyfin:8096" in message for message in slack_messages)

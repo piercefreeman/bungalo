@@ -13,7 +13,7 @@ from bungalo.constants import DEFAULT_CONFIG_FILE
 from bungalo.dashboard import start_dashboard_services
 from bungalo.io import async_to_sync
 from bungalo.nut.cli import main as battery_main
-from bungalo.plugins.plex import main as plex_main
+from bungalo.plugins.jellyfin import main as jellyfin_main
 from bungalo.ssh import main as ssh_main
 
 
@@ -62,8 +62,8 @@ async def run_all():
         iphoto_main(config),
         remote_main(config),
     ]
-    if config.media_server and config.media_server.plugin == "plex":
-        tasks.append(plex_main(config))
+    if config.media_server and config.media_server.plugin == "jellyfin":
+        tasks.append(jellyfin_main(config))
     await asyncio.gather(*tasks)
 
 
@@ -100,10 +100,10 @@ async def ssh_setup():
 
 @cli.command()
 @async_to_sync
-async def plex():
-    """Launch the Plex media server plugin."""
+async def jellyfin():
+    """Launch the Jellyfin media server plugin."""
     config = get_config()
-    await plex_main(config)
+    await jellyfin_main(config)
 
 
 def get_config():

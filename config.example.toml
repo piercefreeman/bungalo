@@ -38,7 +38,7 @@ self_ip = "100.64.0.10"
   output_directory = "iphoto"
 
 [media_server]
-  plugin = "plex"
+  plugin = "jellyfin"
   transcode = "nas:unifi-nas://Media/Transcode"
 
 [[media_server.mounts]]

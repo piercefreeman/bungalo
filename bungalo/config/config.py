@@ -68,7 +68,7 @@ class MediaServerMount(BaseModel):
 
 
 class MediaServerConfig(BaseSettings):
-    plugin: Literal["plex"]
+    plugin: Literal["jellyfin"]
     transcode: NASPath
     mounts: list[MediaServerMount] = Field(default_factory=list)
 
@@ -140,7 +140,7 @@ class BungaloConfig(BaseSettings):
     # Storage locations
     endpoints: EndpointConfig = Field(default_factory=EndpointConfig)
 
-    # Media servers (e.g., Plex)
+    # Media servers (e.g., Jellyfin)
     media_server: MediaServerConfig | None = None
 
     # Validate that all of the remote files that were validated to NAS files or

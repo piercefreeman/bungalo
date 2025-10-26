@@ -6,23 +6,24 @@ from pathlib import Path
 from bungalo.app_manager import AppManager
 from bungalo.backups.nas import mount_smb
 from bungalo.config import BungaloConfig
+from bungalo.config.config import MediaServerConfig
 from bungalo.config.endpoints import NASEndpoint
 from bungalo.logger import CONSOLE
 from bungalo.slack import SlackClient
 
-PLEX_IMAGE = "plexinc/pms-docker:latest"
-CONTAINER_NAME = "bungalo-plex"
-ENV_PASSTHROUGH = ("PLEX_CLAIM", "PLEX_UID", "PLEX_GID", "TZ")
+JELLYFIN_IMAGE = "jellyfin/jellyfin:latest"
+CONTAINER_NAME = "bungalo-jellyfin"
+ENV_PASSTHROUGH = ("JELLYFIN_UID", "JELLYFIN_GID")
 
 
 def _get_root() -> Path:
-    """Return the root directory for Plex runtime data."""
-    return Path(os.environ.get("BUNGALO_PLEX_ROOT", "~/.bungalo/plex")).expanduser()
+    """Return the root directory for Jellyfin runtime data."""
+    return Path(os.environ.get("BUNGALO_JELLYFIN_ROOT", "~/.bungalo/jellyfin")).expanduser()
 
 
 def _ensure_directories() -> tuple[Path, Path]:
     """
-    Ensure the default directory structure required for Plex exists.
+    Ensure the default directory structure required for Jellyfin exists.
 
     Returns:
         Tuple of (config_dir, mount_root).
@@ -44,7 +45,7 @@ def _resolve_nas_endpoints(config: BungaloConfig) -> dict[str, NASEndpoint]:
 
 
 async def _remove_existing_container() -> None:
-    """Best-effort removal of an existing Plex container with our managed name."""
+    """Best-effort removal of an existing Jellyfin container with our managed name."""
     process = await asyncio.create_subprocess_exec(
         "docker",
         "rm",
@@ -56,16 +57,13 @@ async def _remove_existing_container() -> None:
     await process.wait()
 
 
-def _build_env_args() -> list[str]:
+def _build_env_args(media_config: MediaServerConfig) -> list[str]:
     env_args: list[str] = []
     # Always default timezone to UTC if host is not configured.
     timezone = os.environ.get("TZ", "UTC")
     env_args.extend(["-e", f"TZ={timezone}"])
 
     for var in ENV_PASSTHROUGH:
-        if var == "TZ":
-            # Already handled above
-            continue
         value = os.environ.get(var)
         if value:
             env_args.extend(["-e", f"{var}={value}"])
@@ -74,10 +72,10 @@ def _build_env_args() -> list[str]:
 
 async def main(config: BungaloConfig) -> None:
     """
-    Launch the Plex media server container after mounting configured NAS paths.
+    Launch the Jellyfin media server container after mounting configured NAS paths.
     """
     app_manager = AppManager.get()
-    service_name = "plex"
+    service_name = "jellyfin"
     slack_client = SlackClient(
         app_token=config.slack.app_token,
         bot_token=config.slack.bot_token,
@@ -87,9 +85,9 @@ async def main(config: BungaloConfig) -> None:
     media_config = config.media_server
     if not media_config:
         raise ValueError("Media server config not defined")
-    if media_config.plugin != "plex":
+    if media_config.plugin != "jellyfin":
         raise ValueError(
-            f"Unsupported media server plugin '{media_config.plugin}', expected 'plex'"
+            f"Unsupported media server plugin '{media_config.plugin}', expected 'jellyfin'"
         )
 
     nas_endpoints = _resolve_nas_endpoints(config)
@@ -132,7 +130,7 @@ async def main(config: BungaloConfig) -> None:
         volume_args.extend(
             [
                 "-v",
-                f"{transcode_local_path}:/transcode",
+                f"{transcode_local_path}:/cache",
             ]
         )
 
@@ -175,10 +173,10 @@ async def main(config: BungaloConfig) -> None:
             volume_spec = f"{local_media_path}:{container_path}:ro"
             volume_args.extend(["-v", volume_spec])
             CONSOLE.print(
-                f"Exposing '{local_media_path}' to Plex at '{container_path}'"
+                f"Exposing '{local_media_path}' to Jellyfin at '{container_path}'"
             )
 
-        env_args = _build_env_args()
+        env_args = _build_env_args(media_config)
         docker_cmd = [
             "docker",
             "run",
@@ -189,34 +187,34 @@ async def main(config: BungaloConfig) -> None:
             "host",
             *env_args,
             *volume_args,
-            PLEX_IMAGE,
+            JELLYFIN_IMAGE,
         ]
 
         CONSOLE.print(
-            f"Starting Plex container '{CONTAINER_NAME}' with image '{PLEX_IMAGE}'"
+            f"Starting Jellyfin container '{CONTAINER_NAME}' with image '{JELLYFIN_IMAGE}'"
         )
         await _remove_existing_container()
         await app_manager.update_service(
             service_name,
             state="running",
-            detail="Starting Plex media server container",
+            detail="Starting Jellyfin media server container",
         )
         process = await asyncio.create_subprocess_exec(*docker_cmd)
         await app_manager.update_service(
             service_name,
             state="running",
-            detail="Plex media server running",
+            detail="Jellyfin media server running",
         )
-        plex_host = (
-            os.environ.get("PLEX_EXTERNAL_HOST")
+        jellyfin_host = (
+            os.environ.get("JELLYFIN_EXTERNAL_HOST")
             or (
-                f"http://{config.root.self_ip}:32400/web"
+                f"http://{config.root.self_ip}:8096"
                 if config.root.self_ip
-                else "http://127.0.0.1:32400/web"
+                else "http://127.0.0.1:8096"
             )
         )
         await slack_client.create_status(
-            f"Plex is now running → {plex_host}"
+            f"Jellyfin is now running → {jellyfin_host}"
         )
         returncode = await process.wait()
 
@@ -224,11 +222,11 @@ async def main(config: BungaloConfig) -> None:
             await app_manager.update_service(
                 service_name,
                 state="error",
-                detail=f"Plex container exited with code {returncode}",
+                detail=f"Jellyfin container exited with code {returncode}",
             )
-            raise RuntimeError(f"Plex container exited with code {returncode}")
+            raise RuntimeError(f"Jellyfin container exited with code {returncode}")
         await app_manager.update_service(
             service_name,
             state="completed",
-            detail="Plex container stopped",
+            detail="Jellyfin container stopped",
         )

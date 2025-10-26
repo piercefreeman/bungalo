@@ -86,13 +86,13 @@ Set `[root].self_ip` (or export `BUNGALO_EXTERNAL_HOST`) if you want Slack links
 
 ### Media Server
 
-Define NAS shares that should be exposed to Plex via the new `media_server` configuration block. Bungalo will mount each NAS share and launch the Plex container on demand:
+Define NAS shares that should be exposed to Jellyfin via the `media_server` configuration block. Bungalo will mount each NAS share and launch the Jellyfin container on demand:
 
 ```bash
-bungalo plex
+bungalo jellyfin
 ```
 
-Mounts are published to the container as read-only volumes so Plex can index them without modifying source data. Provide a NAS-backed `transcode` path (writeable) so temporary Plex artifacts never hit the local disk. We derive the Slack announcement URL from `[root].self_ip`, falling back to localhost if unset. We launch a plex docker container of its own in order to provide a proper amount of isolation from our encryption credentials.
+Mounts are published to the container as read-only volumes so Jellyfin can index them without modifying source data. Provide a NAS-backed `transcode` path (writeable) so temporary transcoding artifacts land off-box; we mount it inside the container at `/cache`. We derive the Slack announcement URL from `[root].self_ip`, falling back to localhost if unset. We launch a Jellyfin docker container of its own in order to provide a proper amount of isolation from our encryption credentials.
 
 ## Future Work
 
@@ -142,7 +142,7 @@ make test -- -k test_fully_parameterized_config
    The flags explained:
    - `--privileged`: Required for USB device access
    - `--network host`: Allows direct access to host network for SSH operations
-   - `-v /var/run/docker.sock:/var/run/docker.sock`: Grants Bungalo access to launch Plex containers via the host Docker daemon
+   - `-v /var/run/docker.sock:/var/run/docker.sock`: Grants Bungalo access to launch Jellyfin containers via the host Docker daemon
    - `-v ~/.bungalo:/root/.bungalo`: Mounts your config directory
    - `-v /dev/bus/usb:/dev/bus/usb`: Mounts USB devices
 

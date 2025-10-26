@@ -103,7 +103,7 @@ def config_dict() -> dict[str, Any]:
             ],
         },
         "media_server": {
-            "plugin": "plex",
+            "plugin": "jellyfin",
             "transcode": "nas:nas1://drive1/media/transcode",
             "mounts": [
                 {
@@ -219,7 +219,7 @@ def test_fully_parameterized_config(config_dict: dict[str, Any]) -> None:
 
     # Test media server config
     assert isinstance(config.media_server, MediaServerConfig)
-    assert config.media_server.plugin == "plex"
+    assert config.media_server.plugin == "jellyfin"
     assert isinstance(config.media_server.transcode, NASPath)
     assert len(config.media_server.mounts) == 2
     assert isinstance(config.media_server.mounts[0], MediaServerMount)
