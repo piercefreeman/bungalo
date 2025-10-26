@@ -2,20 +2,20 @@
 
 import { Badge } from "@/components/ui/badge";
 
-const statusTone: Record<string, "neutral" | "success" | "danger" | "warning"> = {
-  running: "neutral",
-  idle: "neutral",
-  completed: "success",
-  success: "success",
-  error: "danger",
-  failed: "danger",
-  warning: "warning",
-  pending: "warning",
-  submitted: "neutral",
+const statusVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+  running: "default",
+  idle: "secondary",
+  completed: "default",
+  success: "default",
+  error: "destructive",
+  failed: "destructive",
+  warning: "outline",
+  pending: "outline",
+  submitted: "secondary",
 };
 
 export function StatusBadge({ state }: { state: string }) {
-  const tone = statusTone[state.toLowerCase()] ?? "neutral";
+  const variant = statusVariant[state.toLowerCase()] ?? "secondary";
   const label = state.replace(/_/g, " ");
-  return <Badge tone={tone}>{label}</Badge>;
+  return <Badge variant={variant} className="uppercase">{label}</Badge>;
 }

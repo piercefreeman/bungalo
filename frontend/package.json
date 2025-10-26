@@ -7,6 +7,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@radix-ui/react-slot": "^1.2.3",
     "clsx": "^2.1.0",
     "next": "^14.2.33",
     "react": "18.2.0",

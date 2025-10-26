@@ -51,23 +51,23 @@ export function TaskCard({ task, onSubmitted }: TaskCardProps) {
   return (
     <Card className="h-full">
       <CardHeader className="space-y-3">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-2xl">{task.title}</CardTitle>
+        <div className="flex items-center justify-between gap-4">
+          <CardTitle>{task.title}</CardTitle>
           <StatusBadge state={task.status} />
         </div>
-        <CardDescription className="leading-relaxed">
+        <CardDescription>
           {task.prompt}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4 text-sm">
+      <CardContent className="space-y-4">
         {task.error ? (
-          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
+          <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             {task.error}
-          </p>
+          </div>
         ) : null}
 
         {isEditable ? (
-          <form onSubmit={handleSubmit} className="space-y-3">
+          <form onSubmit={handleSubmit} className="space-y-4">
             <Input
               autoFocus
               placeholder="Enter response…"
@@ -76,16 +76,16 @@ export function TaskCard({ task, onSubmitted }: TaskCardProps) {
               maxLength={64}
               disabled={submitting}
             />
-            <Button type="submit" className="w-full" disabled={submitting}>
+            <Button type="submit" size="lg" className="w-full" disabled={submitting}>
               {submitting ? "Submitting…" : "Submit"}
             </Button>
           </form>
         ) : (
-          <div className="rounded-xl border border-foreground/10 bg-muted px-4 py-3">
+          <div className="rounded-lg border border-border bg-muted/30 px-5 py-4">
             {task.status === "completed" ? (
-              <p className="font-medium">Thank you! This task is complete.</p>
+              <p className="text-sm font-medium">Thank you! This task is complete.</p>
             ) : (
-              <p className="text-foreground/70">
+              <p className="text-sm text-foreground/60">
                 Awaiting processing. You&apos;ll be prompted again if more
                 information is needed.
               </p>
@@ -94,7 +94,7 @@ export function TaskCard({ task, onSubmitted }: TaskCardProps) {
         )}
 
         {statusMessage ? (
-          <p className="text-xs uppercase tracking-wide text-foreground/60">
+          <p className="text-xs uppercase tracking-wider text-foreground/50 font-medium">
             {statusMessage}
           </p>
         ) : null}

@@ -54,44 +54,48 @@ function ServicesTable({ services }: { services: ServiceStatus[] }) {
   }
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle>Services</CardTitle>
-        <CardDescription>
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <h2 className="text-4xl font-bold tracking-tighter">Services</h2>
+        <p className="text-base text-foreground/60">
           Monitor the subsystems that keep Bungalo running.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="px-0">
+        </p>
+      </div>
+      <Card className="overflow-hidden">
         <Table>
-          <TableHead>
-            <TableRow>
-              <TableHeader className="px-6">Service</TableHeader>
-              <TableHeader>Status</TableHeader>
-              <TableHeader>Detail</TableHeader>
-              <TableHeader>Next Run</TableHeader>
-              <TableHeader>Last Run</TableHeader>
+          <TableHeader className="bg-muted/30">
+            <TableRow className="hover:bg-muted/30">
+              <TableHead className="px-8 py-4 text-xs font-semibold uppercase tracking-wider">Service</TableHead>
+              <TableHead className="px-8 py-4 text-xs font-semibold uppercase tracking-wider">Status</TableHead>
+              <TableHead className="px-8 py-4 text-xs font-semibold uppercase tracking-wider">Detail</TableHead>
+              <TableHead className="px-8 py-4 text-xs font-semibold uppercase tracking-wider">Next Run</TableHead>
+              <TableHead className="px-8 py-4 text-xs font-semibold uppercase tracking-wider">Last Run</TableHead>
             </TableRow>
-          </TableHead>
+          </TableHeader>
           <TableBody>
             {services.map((service) => (
               <TableRow key={service.name}>
-                <TableCell className="px-6 font-medium">
+                <TableCell className="px-8 py-4 font-semibold">
                   {titleCase(service.name)}
                 </TableCell>
-                <TableCell>
+                <TableCell className="px-8 py-4">
                   <StatusBadge state={service.state} />
                 </TableCell>
-                <TableCell className="max-w-md text-foreground/70">
+                <TableCell className="px-8 py-4 max-w-md text-muted-foreground">
                   {service.detail || "—"}
                 </TableCell>
-                <TableCell>{formatDateTime(service.next_run_at)}</TableCell>
-                <TableCell>{formatDateTime(service.last_run_at)}</TableCell>
+                <TableCell className="px-8 py-4 text-muted-foreground">
+                  {formatDateTime(service.next_run_at)}
+                </TableCell>
+                <TableCell className="px-8 py-4 text-muted-foreground">
+                  {formatDateTime(service.last_run_at)}
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
-      </CardContent>
-    </Card>
+      </Card>
+    </div>
   );
 }
 
@@ -128,121 +132,133 @@ export default function DashboardPage() {
     data?.services.filter((service) => service.state.toLowerCase() === "running") ?? [];
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-10 px-6 py-12">
-      <header className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-baseline sm:justify-between">
-          <div>
-            <p className="text-2xl font-semibold tracking-tight text-foreground">
-              Bungalo Operations
-            </p>
-            <p className="max-w-2xl text-base text-foreground/70">
-              Stay in sync with the systems that keep your library healthy. Every
-              task, service, and sync at a glance.
-            </p>
-          </div>
-          {data?.started_at ? (
-            <p className="text-sm uppercase tracking-widest text-foreground/40">
-              App manager started {formatDateTime(data.started_at)}
-            </p>
-          ) : null}
-        </div>
-        {error ? (
-          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
-          </p>
-        ) : null}
-      </header>
-
-      {isLoading ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Loading status…</CardTitle>
-            <CardDescription>Breathe in, breathe out.</CardDescription>
-          </CardHeader>
-        </Card>
-      ) : null}
-
-      <section className="grid gap-6 md:grid-cols-2">
-        <Card className="col-span-1 md:col-span-2">
-          <CardHeader className="pb-3">
-            <CardTitle>Active Sync</CardTitle>
-            <CardDescription>
-              Live view of syncing processes currently underway.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
-            {activeServices.length ? (
-              activeServices.map((service) => (
-                <div
-                  key={service.name}
-                  className="flex flex-col gap-1 rounded-xl border border-foreground/10 bg-white/70 px-5 py-4 shadow-sm"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-lg font-semibold">
-                      {titleCase(service.name)}
-                    </span>
-                    <StatusBadge state={service.state} />
-                  </div>
-                  <span className="text-foreground/70">{service.detail}</span>
-                </div>
-              ))
-            ) : (
-              <p className="rounded-xl border border-dashed border-foreground/20 px-5 py-6 text-center text-foreground/60">
-                No active syncs right now. Everything is calm.
+    <main className="mx-auto flex min-h-screen w-full flex-col">
+      <div className="mx-auto w-full max-w-7xl px-6 py-16 space-y-16">
+        <header className="space-y-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-3">
+              <h1 className="text-5xl font-bold tracking-tighter text-foreground">
+                Bungalo Operations
+              </h1>
+              <p className="max-w-2xl text-lg text-foreground/60 leading-relaxed">
+                Stay in sync with the systems that keep your library healthy. Every
+                task, service, and sync at a glance.
               </p>
-            )}
-          </CardContent>
-        </Card>
+            </div>
+            {data?.started_at ? (
+              <p className="text-xs uppercase tracking-widest text-foreground/40 mt-2">
+                App manager started {formatDateTime(data.started_at)}
+              </p>
+            ) : null}
+          </div>
+          {error ? (
+            <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-6 py-4 text-sm text-destructive">
+              {error}
+            </div>
+          ) : null}
+        </header>
 
-        <ServicesTable services={data?.services ?? []} />
-      </section>
-
-      <section className="space-y-6">
-        <div className="flex flex-col gap-2">
-          <h2 className="text-xl font-semibold tracking-tight">Tasks</h2>
-          <p className="text-sm text-foreground/70">
-            We&apos;ll ask for input here when Bungalo needs a human touch.
-          </p>
-        </div>
-
-        {pendingTasks && pendingTasks.length === 0 ? (
+        {isLoading ? (
           <Card>
             <CardHeader>
-              <CardTitle>No tasks on deck</CardTitle>
-              <CardDescription>
-                We&apos;ll nudge you on Slack when something needs attention.
-              </CardDescription>
+              <CardTitle>Loading status…</CardTitle>
+              <CardDescription>Breathe in, breathe out.</CardDescription>
             </CardHeader>
           </Card>
-        ) : (
-          <div className="grid gap-6 md:grid-cols-2">
-            {pendingTasks?.map((task) => (
-              <TaskCard key={task.id} task={task} onSubmitted={refresh} />
-            ))}
-          </div>
-        )}
+        ) : null}
 
-        {completedTasks && completedTasks.length ? (
-          <div className="grid gap-4">
-            <h3 className="text-sm uppercase tracking-wide text-foreground/40">
-              Recently completed
-            </h3>
-            <div className="grid gap-4 md:grid-cols-2">
-              {completedTasks.map((task) => (
-                <Card key={task.id} className="border-foreground/10 bg-white/80">
-                  <CardHeader className="space-y-2">
-                    <CardTitle className="text-lg">{task.title}</CardTitle>
-                    <CardDescription>{task.prompt}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="text-sm text-foreground/60">
-                    Completed {formatDateTime(task.updated_at)}
-                  </CardContent>
-                </Card>
+        <section className="space-y-8">
+          <Card>
+            <CardHeader>
+              <CardTitle>Active Sync</CardTitle>
+              <CardDescription>
+                Live view of syncing processes currently underway.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {activeServices.length ? (
+                activeServices.map((service) => (
+                  <div
+                    key={service.name}
+                    className="flex flex-col gap-2 rounded-lg border border-border bg-muted/20 px-6 py-5 transition-shadow hover:shadow-sm"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xl font-semibold tracking-tight">
+                        {titleCase(service.name)}
+                      </span>
+                      <StatusBadge state={service.state} />
+                    </div>
+                    <span className="text-sm text-foreground/60 leading-relaxed">
+                      {service.detail}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-lg border border-dashed border-border bg-muted/10 px-6 py-12 text-center">
+                  <p className="text-foreground/50">
+                    No active syncs right now. Everything is calm.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+      </div>
+
+      <div className="w-full border-t border-border bg-card/50 backdrop-blur-sm">
+        <div className="mx-auto w-full max-w-7xl px-6 py-12">
+          <ServicesTable services={data?.services ?? []} />
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-7xl px-6 py-16 space-y-12">
+        <section className="space-y-8">
+          <div className="flex flex-col gap-2">
+            <h2 className="text-4xl font-bold tracking-tighter">Tasks</h2>
+            <p className="text-base text-foreground/60">
+              We&apos;ll ask for input here when Bungalo needs a human touch.
+            </p>
+          </div>
+
+          {pendingTasks && pendingTasks.length === 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>No tasks on deck</CardTitle>
+                <CardDescription>
+                  We&apos;ll nudge you on Slack when something needs attention.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          ) : (
+            <div className="grid gap-6 md:grid-cols-2">
+              {pendingTasks?.map((task) => (
+                <TaskCard key={task.id} task={task} onSubmitted={refresh} />
               ))}
             </div>
-          </div>
-        ) : null}
-      </section>
+          )}
+
+          {completedTasks && completedTasks.length ? (
+            <div className="space-y-6">
+              <h3 className="text-xs uppercase tracking-wider text-foreground/40 font-medium">
+                Recently completed
+              </h3>
+              <div className="grid gap-6 md:grid-cols-2">
+                {completedTasks.map((task) => (
+                  <Card key={task.id} className="bg-muted/30">
+                    <CardHeader>
+                      <CardTitle className="text-xl">{task.title}</CardTitle>
+                      <CardDescription>{task.prompt}</CardDescription>
+                    </CardHeader>
+                    <CardContent className="text-sm text-foreground/50">
+                      Completed {formatDateTime(task.updated_at)}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
+      </div>
     </main>
   );
 }
