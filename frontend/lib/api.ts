@@ -7,6 +7,52 @@ export interface ServiceStatus {
   last_run_at?: string | null;
 }
 
+export interface CpuCoreMetric {
+  index: number;
+  percent: number;
+}
+
+export interface LoadAverage {
+  "1m": number;
+  "5m": number;
+  "15m": number;
+}
+
+export interface ProcessMetric {
+  pid: number;
+  name: string;
+  command: string;
+  cpu_percent: number;
+  memory_percent: number;
+}
+
+export interface SystemMetrics {
+  collected_at: string;
+  cpu: {
+    cores: CpuCoreMetric[];
+    average_percent: number;
+    load_average: LoadAverage | null;
+  };
+  memory: {
+    total: number;
+    available: number;
+    used: number;
+    free: number;
+    percent: number;
+  };
+  swap: {
+    total: number;
+    used: number;
+    free: number;
+    percent: number;
+  };
+  processes: ProcessMetric[];
+}
+
+export interface SystemMetricsError {
+  error: string;
+}
+
 export interface TaskState {
   id: string;
   title: string;
@@ -24,6 +70,7 @@ export interface AppState {
   started_at: string;
   services: ServiceStatus[];
   tasks: TaskState[];
+  system?: SystemMetrics | SystemMetricsError;
 }
 
 function resolveApiBase(): string {

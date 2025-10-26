@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { loadState, type AppState, type ServiceStatus } from "@/lib/api";
+import {
+  loadState,
+  type AppState,
+  type ServiceStatus,
+  type SystemMetrics,
+  type SystemMetricsError,
+} from "@/lib/api";
 import { TaskCard } from "@/components/task-card";
 import { StatusBadge } from "@/components/status-badge";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -42,6 +48,10 @@ function formatRelativeTime(value?: string | null) {
   const now = new Date();
   const diffMs = date.getTime() - now.getTime();
   const diffMins = Math.round(diffMs / 60000);
+
+  if (Math.abs(diffMs) < 60000) {
+    return diffMs < 0 ? "just now" : "in under a minute";
+  }
   
   if (diffMins < 0) {
     const absMins = Math.abs(diffMins);
@@ -63,6 +73,25 @@ function titleCase(name: string) {
   return name
     .replace(/_/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value < 0) return "—";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const precision = unitIndex === 0 ? 0 : 1;
+  return `${size.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function isMetricsError(
+  metrics: SystemMetrics | SystemMetricsError,
+): metrics is SystemMetricsError {
+  return "error" in metrics;
 }
 
 function ServicesTable({ services }: { services: ServiceStatus[] }) {
@@ -123,6 +152,170 @@ function ServicesTable({ services }: { services: ServiceStatus[] }) {
   );
 }
 
+function SystemMetricsCard({
+  metrics,
+}: {
+  metrics?: SystemMetrics | SystemMetricsError | null;
+}) {
+  if (!metrics) return null;
+  if (isMetricsError(metrics)) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>System Health</CardTitle>
+          <CardDescription>Unable to load current metrics.</CardDescription>
+        </CardHeader>
+        <CardContent className="text-sm text-destructive">
+          {metrics.error}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const memoryUsedPercent = Math.min(metrics.memory.percent, 100);
+  const swapUsedPercent =
+    metrics.swap.total > 0 ? Math.min(metrics.swap.percent, 100) : 0;
+
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader>
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <CardTitle>System Health</CardTitle>
+            <CardDescription>
+              Live snapshot of CPU, memory, and active processes.
+            </CardDescription>
+          </div>
+          <p className="text-xs uppercase tracking-wider text-foreground/40">
+            Updated {formatDateTime(metrics.collected_at)}
+          </p>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-6 md:grid-cols-3">
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                CPU
+              </p>
+              <p className="text-3xl font-semibold text-foreground">
+                {metrics.cpu.average_percent.toFixed(1)}%
+              </p>
+              {metrics.cpu.load_average ? (
+                <p className="text-xs text-muted-foreground">
+                  Load avg {metrics.cpu.load_average["1m"].toFixed(2)} /{" "}
+                  {metrics.cpu.load_average["5m"].toFixed(2)} /{" "}
+                  {metrics.cpu.load_average["15m"].toFixed(2)}
+                </p>
+              ) : null}
+            </div>
+            <div className="space-y-2">
+              {metrics.cpu.cores.map((core) => (
+                <div key={core.index} className="space-y-1">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Core {core.index + 1}</span>
+                    <span>{core.percent.toFixed(0)}%</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-muted">
+                    <div
+                      className="h-2 rounded-full bg-primary transition-all"
+                      style={{ width: `${Math.min(core.percent, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-5">
+            <div className="space-y-2">
+              <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                Memory
+              </p>
+              <p className="text-lg font-semibold text-foreground">
+                {formatBytes(metrics.memory.used)} /{" "}
+                {formatBytes(metrics.memory.total)}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {memoryUsedPercent.toFixed(1)}% used •{" "}
+                {formatBytes(metrics.memory.available)} available
+              </p>
+              <div className="h-2 w-full rounded-full bg-muted">
+                <div
+                  className="h-2 rounded-full bg-emerald-500 transition-all"
+                  style={{ width: `${memoryUsedPercent}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                Swap
+              </p>
+              {metrics.swap.total > 0 ? (
+                <>
+                  <p className="text-lg font-semibold text-foreground">
+                    {formatBytes(metrics.swap.used)} /{" "}
+                    {formatBytes(metrics.swap.total)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {swapUsedPercent.toFixed(1)}% used •{" "}
+                    {formatBytes(metrics.swap.free)} free
+                  </p>
+                  <div className="h-2 w-full rounded-full bg-muted">
+                    <div
+                      className="h-2 rounded-full bg-orange-500 transition-all"
+                      style={{ width: `${swapUsedPercent}%` }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Swap not configured.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+              Top Processes
+            </p>
+            {metrics.processes.length ? (
+              <div className="space-y-3">
+                {metrics.processes.map((process) => (
+                  <div
+                    key={process.pid}
+                    className="space-y-1 rounded-lg border border-border/40 p-3"
+                  >
+                    <div className="flex items-center justify-between text-sm font-medium text-foreground">
+                      <span className="truncate pr-2">
+                        {process.name || `PID ${process.pid}`}
+                      </span>
+                      <span>{process.cpu_percent.toFixed(1)}%</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      PID {process.pid} • {process.memory_percent.toFixed(1)}% RAM
+                    </p>
+                    {process.command ? (
+                      <p className="text-xs text-muted-foreground truncate">
+                        {process.command}
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No active processes to display.
+              </p>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 export default function DashboardPage() {
   const [data, setData] = useState<AppState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -230,6 +423,8 @@ export default function DashboardPage() {
             </a>
           </Card>
         </section>
+
+        <SystemMetricsCard metrics={data?.system ?? null} />
       </div>
 
       <div className="w-full border-t border-border bg-card/50 backdrop-blur-sm">
