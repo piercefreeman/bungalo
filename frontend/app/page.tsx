@@ -36,6 +36,29 @@ function formatDateTime(value?: string | null) {
   });
 }
 
+function formatRelativeTime(value?: string | null) {
+  if (!value) return "—";
+  const date = new Date(value);
+  const now = new Date();
+  const diffMs = date.getTime() - now.getTime();
+  const diffMins = Math.round(diffMs / 60000);
+  
+  if (diffMins < 0) {
+    const absMins = Math.abs(diffMins);
+    if (absMins < 60) return `${absMins} min ago`;
+    const absHours = Math.floor(absMins / 60);
+    if (absHours < 24) return `${absHours}h ago`;
+    const absDays = Math.floor(absHours / 24);
+    return `${absDays}d ago`;
+  }
+  
+  if (diffMins < 60) return `in ${diffMins} min`;
+  const hours = Math.floor(diffMins / 60);
+  if (hours < 24) return `in ${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `in ${days}d`;
+}
+
 function titleCase(name: string) {
   return name
     .replace(/_/g, " ")
@@ -69,8 +92,8 @@ function ServicesTable({ services }: { services: ServiceStatus[] }) {
               <TableHead>Service</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Detail</TableHead>
-              <TableHead>Next Run</TableHead>
               <TableHead>Last Run</TableHead>
+              <TableHead>Next Run</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -86,10 +109,10 @@ function ServicesTable({ services }: { services: ServiceStatus[] }) {
                   {service.detail || "—"}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
-                  {formatDateTime(service.next_run_at)}
+                  {formatDateTime(service.last_run_at)}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
-                  {formatDateTime(service.last_run_at)}
+                  {formatRelativeTime(service.next_run_at)}
                 </TableCell>
               </TableRow>
             ))}

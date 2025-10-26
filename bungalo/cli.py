@@ -30,9 +30,9 @@ async def run_all():
 
     dashboard_port_raw = os.environ.get("BUNGALO_NEXT_PORT")
     try:
-        dashboard_port = int(dashboard_port_raw) if dashboard_port_raw else 8000
+        dashboard_port = int(dashboard_port_raw) if dashboard_port_raw else 80
     except ValueError:
-        dashboard_port = 8000
+        dashboard_port = 80
     api_port_raw = os.environ.get("BUNGALO_API_PORT")
     try:
         api_port = int(api_port_raw) if api_port_raw else 5006

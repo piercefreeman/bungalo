@@ -86,7 +86,7 @@ class AppManager:
         self._task_waiters: Dict[str, asyncio.Future[str]] = {}
         self.started_at = utcnow()
         self.dashboard_base_url = os.environ.get(
-            "BUNGALO_DASHBOARD_URL", "http://localhost:8000"
+            "BUNGALO_DASHBOARD_URL", "http://localhost:80"
         )
 
     @classmethod
