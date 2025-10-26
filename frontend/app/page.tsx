@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { loadState, type AppState, type ServiceStatus } from "@/lib/api";
 import { TaskCard } from "@/components/task-card";
 import { StatusBadge } from "@/components/status-badge";
+import { ThemeToggle } from "@/components/theme-toggle";
 import {
   Card,
   CardContent,
@@ -135,8 +136,8 @@ export default function DashboardPage() {
     <main className="mx-auto flex min-h-screen w-full flex-col">
       <div className="mx-auto w-full max-w-7xl px-6 py-16 space-y-16">
         <header className="space-y-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1 space-y-3">
               <h1 className="text-5xl font-bold tracking-tighter text-foreground">
                 Bungalo Operations
               </h1>
@@ -145,11 +146,14 @@ export default function DashboardPage() {
                 task, service, and sync at a glance.
               </p>
             </div>
-            {data?.started_at ? (
-              <p className="text-xs uppercase tracking-widest text-foreground/40 mt-2">
-                App manager started {formatDateTime(data.started_at)}
-              </p>
-            ) : null}
+            <div className="flex flex-col items-end gap-3">
+              <ThemeToggle />
+              {data?.started_at ? (
+                <p className="text-xs uppercase tracking-widest text-foreground/40">
+                  App manager started {formatDateTime(data.started_at)}
+                </p>
+              ) : null}
+            </div>
           </div>
           {error ? (
             <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-6 py-4 text-sm text-destructive">
@@ -167,40 +171,40 @@ export default function DashboardPage() {
           </Card>
         ) : null}
 
-        <section className="space-y-8">
-          <Card>
-            <CardHeader>
-              <CardTitle>Active Sync</CardTitle>
-              <CardDescription>
-                Live view of syncing processes currently underway.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {activeServices.length ? (
-                activeServices.map((service) => (
-                  <div
-                    key={service.name}
-                    className="flex flex-col gap-2 rounded-lg border border-border bg-muted/20 px-6 py-5 transition-shadow hover:shadow-sm"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xl font-semibold tracking-tight">
-                        {titleCase(service.name)}
-                      </span>
-                      <StatusBadge state={service.state} />
-                    </div>
-                    <span className="text-sm text-foreground/60 leading-relaxed">
-                      {service.detail}
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-lg border border-dashed border-border bg-muted/10 px-6 py-12 text-center">
-                  <p className="text-foreground/50">
-                    No active syncs right now. Everything is calm.
-                  </p>
+        <section className="grid gap-4 md:grid-cols-2">
+          <Card className="transition-all hover:shadow-lg cursor-pointer">
+            <a href="/" className="block">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-xl">Bungalo Service</CardTitle>
+                  <StatusBadge state="running" />
                 </div>
-              )}
-            </CardContent>
+                <CardDescription>
+                  Dashboard and operations control
+                </CardDescription>
+              </CardHeader>
+            </a>
+          </Card>
+
+          <Card className="transition-all hover:shadow-lg cursor-pointer">
+            <a 
+              href={`http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8096`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block"
+            >
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-xl">Media Server</CardTitle>
+                  <svg className="h-4 w-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                </div>
+                <CardDescription>
+                  Access your media library
+                </CardDescription>
+              </CardHeader>
+            </a>
           </Card>
         </section>
       </div>
