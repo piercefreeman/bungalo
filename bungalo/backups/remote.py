@@ -174,9 +174,7 @@ class RCloneSync:
         for pair in self.pairs:
             try:
                 with self._pair_context(pair) as (resolved_src, resolved_dst):
-                    await self._emit_status(
-                        f"Syncing {resolved_src} → {resolved_dst}"
-                    )
+                    await self._emit_status(f"Syncing {resolved_src} → {resolved_dst}")
                     core_status = await self._alert(
                         f"Syncing {resolved_src} → {resolved_dst}"
                     )

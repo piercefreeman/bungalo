@@ -229,7 +229,7 @@ def test_fully_parameterized_config(config_dict: dict[str, Any]) -> None:
 
 
 def test_media_server_duplicate_mount_names_invalid(
-    config_dict: dict[str, Any]
+    config_dict: dict[str, Any],
 ) -> None:
     """Duplicate media server mount names should be rejected."""
     config_dict["media_server"]["mounts"][1]["name"] = "movies"

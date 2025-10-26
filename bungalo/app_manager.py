@@ -175,7 +175,9 @@ class AppManager:
         if not future.done():
             future.set_result(value)
         else:
-            LOGGER.warning("Future for task %s already resolved before submission", task_id)
+            LOGGER.warning(
+                "Future for task %s already resolved before submission", task_id
+            )
 
     async def update_service(
         self,
@@ -191,12 +193,18 @@ class AppManager:
             payload = ServiceStatus(
                 name=name,
                 state=state,
-                detail=detail if detail is not None else (prev.detail if prev else None),
+                detail=detail
+                if detail is not None
+                else (prev.detail if prev else None),
                 next_run_at=(
-                    next_run_at if next_run_at is not None else (prev.next_run_at if prev else None)
+                    next_run_at
+                    if next_run_at is not None
+                    else (prev.next_run_at if prev else None)
                 ),
                 last_run_at=(
-                    last_run_at if last_run_at is not None else (prev.last_run_at if prev else None)
+                    last_run_at
+                    if last_run_at is not None
+                    else (prev.last_run_at if prev else None)
                 ),
             )
             payload.updated_at = utcnow()
@@ -221,9 +229,7 @@ class AppManager:
         interval_seconds: Optional[float] = None,
     ) -> None:
         next_run = (
-            utcnow() + timedelta(seconds=interval_seconds)
-            if interval_seconds
-            else None
+            utcnow() + timedelta(seconds=interval_seconds) if interval_seconds else None
         )
         await self.update_service(
             name,

@@ -20,7 +20,9 @@ DOCKER_READY_TIMEOUT = 60  # seconds
 
 def _get_root() -> Path:
     """Return the root directory for Jellyfin runtime data."""
-    return Path(os.environ.get("BUNGALO_JELLYFIN_ROOT", "~/.bungalo/jellyfin")).expanduser()
+    return Path(
+        os.environ.get("BUNGALO_JELLYFIN_ROOT", "~/.bungalo/jellyfin")
+    ).expanduser()
 
 
 def _ensure_directories() -> tuple[Path, Path]:
@@ -42,31 +44,31 @@ def _ensure_directories() -> tuple[Path, Path]:
 def _cleanup_stale_mounts(mount_root: Path) -> None:
     """
     Clean up any stale mounts from previous container runs.
-    
+
     Similar to how NUT cleans up stale PID files, we need to clean up mounts
     that may have persisted from a previous container instance that didn't
     shut down cleanly.
     """
     if not mount_root.exists():
         return
-    
+
     for mount_dir in mount_root.iterdir():
         if not mount_dir.is_dir():
             continue
-            
+
         if mount_dir.is_mount():
-            CONSOLE.print(
-                f"Found stale mount at '{mount_dir}', cleaning up..."
-            )
+            CONSOLE.print(f"Found stale mount at '{mount_dir}', cleaning up...")
             try:
                 subprocess.run(
-                    ["umount", str(mount_dir)],
-                    check=True,
-                    capture_output=True
+                    ["umount", str(mount_dir)], check=True, capture_output=True
                 )
                 CONSOLE.print(f"Successfully unmounted '{mount_dir}'")
             except subprocess.CalledProcessError as exc:
-                stderr = exc.stderr.decode("utf-8", errors="ignore").strip() if exc.stderr else ""
+                stderr = (
+                    exc.stderr.decode("utf-8", errors="ignore").strip()
+                    if exc.stderr
+                    else ""
+                )
                 CONSOLE.print(
                     f"Warning: Failed to unmount '{mount_dir}': {stderr}. "
                     "Attempting lazy unmount..."
@@ -76,7 +78,7 @@ def _cleanup_stale_mounts(mount_root: Path) -> None:
                     subprocess.run(
                         ["umount", "-l", str(mount_dir)],
                         check=True,
-                        capture_output=True
+                        capture_output=True,
                     )
                     CONSOLE.print(f"Successfully lazy unmounted '{mount_dir}'")
                 except subprocess.CalledProcessError:
@@ -88,7 +90,9 @@ def _cleanup_stale_mounts(mount_root: Path) -> None:
 
 
 def _resolve_nas_endpoints(config: BungaloConfig) -> dict[str, NASEndpoint]:
-    endpoints_by_nickname = {endpoint.nickname: endpoint for endpoint in config.endpoints.nas}
+    endpoints_by_nickname = {
+        endpoint.nickname: endpoint for endpoint in config.endpoints.nas
+    }
     if not endpoints_by_nickname:
         raise ValueError("No NAS endpoints configured, cannot mount media shares")
     return endpoints_by_nickname
@@ -97,12 +101,12 @@ def _resolve_nas_endpoints(config: BungaloConfig) -> dict[str, NASEndpoint]:
 async def _ensure_docker_ready() -> None:
     """
     Ensure the inner Docker daemon is ready to accept commands.
-    
+
     The entrypoint script should have already started dockerd, but this provides
     an additional safety check in case jellyfin is run independently.
     """
     CONSOLE.print("Verifying Docker daemon is ready...")
-    
+
     for attempt in range(DOCKER_READY_TIMEOUT):
         process = await asyncio.create_subprocess_exec(
             "docker",
@@ -111,16 +115,16 @@ async def _ensure_docker_ready() -> None:
             stderr=asyncio.subprocess.DEVNULL,
         )
         returncode = await process.wait()
-        
+
         if returncode == 0:
             CONSOLE.print("Docker daemon is ready!")
             return
-        
+
         if attempt == 0:
             CONSOLE.print("Docker daemon not yet ready, waiting...")
-        
+
         await asyncio.sleep(1)
-    
+
     raise RuntimeError(
         f"Docker daemon not ready after {DOCKER_READY_TIMEOUT}s. "
         "Ensure the container is running with --privileged and dockerd is started."
@@ -156,7 +160,7 @@ def _build_env_args(media_config: MediaServerConfig) -> list[str]:
 async def main(config: BungaloConfig) -> None:
     """
     Launch the Jellyfin media server container after mounting configured NAS paths.
-    
+
     This function runs Jellyfin via Docker-in-Docker: the inner Docker daemon
     (started by our entrypoint script) spawns the Jellyfin container. Because
     Jellyfin runs inside our container's Docker daemon, it can access our mounted
@@ -180,10 +184,10 @@ async def main(config: BungaloConfig) -> None:
 
     # Ensure Docker daemon is ready for Docker-in-Docker
     await _ensure_docker_ready()
-    
+
     nas_endpoints = _resolve_nas_endpoints(config)
     config_dir, mount_root = _ensure_directories()
-    
+
     # Clean up any stale mounts from previous runs (similar to NUT PID cleanup)
     _cleanup_stale_mounts(mount_root)
 
@@ -217,7 +221,9 @@ async def main(config: BungaloConfig) -> None:
 
         transcode_relative = media_config.transcode.path.strip("/")
         transcode_local_path = (
-            transcode_mount / transcode_relative if transcode_relative else transcode_mount
+            transcode_mount / transcode_relative
+            if transcode_relative
+            else transcode_mount
         )
         transcode_local_path.mkdir(parents=True, exist_ok=True)
 
@@ -256,7 +262,9 @@ async def main(config: BungaloConfig) -> None:
             )
 
             relative_path = mount.path.path.strip("/")
-            local_media_path = mounted_path / relative_path if relative_path else mounted_path
+            local_media_path = (
+                mounted_path / relative_path if relative_path else mounted_path
+            )
             container_path = mount.container_path or f"/data/{mount.name}"
 
             if not local_media_path.exists():
@@ -324,17 +332,12 @@ async def main(config: BungaloConfig) -> None:
             state="running",
             detail="Jellyfin media server running",
         )
-        jellyfin_host = (
-            os.environ.get("JELLYFIN_EXTERNAL_HOST")
-            or (
-                f"http://{config.root.self_ip}:8096"
-                if config.root.self_ip
-                else "http://127.0.0.1:8096"
-            )
+        jellyfin_host = os.environ.get("JELLYFIN_EXTERNAL_HOST") or (
+            f"http://{config.root.self_ip}:8096"
+            if config.root.self_ip
+            else "http://127.0.0.1:8096"
         )
-        await slack_client.create_status(
-            f"Jellyfin is now running → {jellyfin_host}"
-        )
+        await slack_client.create_status(f"Jellyfin is now running → {jellyfin_host}")
         returncode = await process.wait()
 
         if returncode:

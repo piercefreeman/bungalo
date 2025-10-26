@@ -191,7 +191,9 @@ async def poll_task(
                 continue
 
             if app_manager:
-                human_power = "On battery" if status.statuses.is_on_battery() else "On AC"
+                human_power = (
+                    "On battery" if status.statuses.is_on_battery() else "On AC"
+                )
                 await app_manager.update_service(
                     service_name,
                     state="running",

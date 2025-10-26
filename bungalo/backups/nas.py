@@ -99,8 +99,12 @@ def mount_smb(
         yield mount_dir
 
     except subprocess.CalledProcessError as exc:
-        stdout = exc.stdout.decode("utf-8", errors="ignore").strip() if exc.stdout else ""
-        stderr = exc.stderr.decode("utf-8", errors="ignore").strip() if exc.stderr else ""
+        stdout = (
+            exc.stdout.decode("utf-8", errors="ignore").strip() if exc.stdout else ""
+        )
+        stderr = (
+            exc.stderr.decode("utf-8", errors="ignore").strip() if exc.stderr else ""
+        )
         detail = stderr or stdout or str(exc)
         CONSOLE.print(
             f"Error mounting SMB share '//{server}/{share_display}' at '{mount_dir}': {detail}"

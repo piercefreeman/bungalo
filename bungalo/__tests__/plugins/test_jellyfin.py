@@ -17,7 +17,9 @@ class DummyProcess:
 
 
 @pytest.mark.asyncio
-async def test_jellyfin_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+async def test_jellyfin_plugin_mounts_and_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     commands: list[tuple[Any, ...]] = []
 
     async def fake_create_subprocess_exec(*args, **kwargs):
@@ -49,7 +51,9 @@ async def test_jellyfin_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, 
 
     monkeypatch.setenv("BUNGALO_JELLYFIN_ROOT", str(tmp_path / "jellyfin"))
     monkeypatch.delenv("TZ", raising=False)
-    monkeypatch.setattr(jellyfin.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        jellyfin.asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
     monkeypatch.setattr(jellyfin, "mount_smb", fake_mount_smb)
     monkeypatch.setattr(jellyfin, "SlackClient", DummySlackClient)
 
@@ -115,4 +119,6 @@ async def test_jellyfin_plugin_mounts_and_runs(monkeypatch: pytest.MonkeyPatch, 
     assert f"{movies_dir}:/media/movies:ro" in volume_targets
     assert f"{tv_dir}:/data/tv:ro" in volume_targets
 
-    assert any("http://tailscale.jellyfin:8096" in message for message in slack_messages)
+    assert any(
+        "http://tailscale.jellyfin:8096" in message for message in slack_messages
+    )

@@ -63,7 +63,9 @@ class MediaServerMount(BaseModel):
     @classmethod
     def validate_container_path(cls, value: str | None) -> str | None:
         if value is not None and not value.startswith("/"):
-            raise ValueError("container_path must be an absolute path starting with '/'")
+            raise ValueError(
+                "container_path must be an absolute path starting with '/'"
+            )
         return value
 
 

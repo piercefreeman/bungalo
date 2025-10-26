@@ -49,7 +49,9 @@ async def run_nextjs(
 ) -> None:
     resolved_dir = frontend_path or FRONTEND_DIR
     if not resolved_dir.exists():
-        LOGGER.warning("Next.js frontend directory not found at %s; skipping launch", resolved_dir)
+        LOGGER.warning(
+            "Next.js frontend directory not found at %s; skipping launch", resolved_dir
+        )
         return
 
     next_port = port or _get_int_env("BUNGALO_NEXT_PORT", 3000)
