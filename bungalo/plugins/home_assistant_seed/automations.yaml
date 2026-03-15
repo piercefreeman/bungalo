@@ -6,8 +6,8 @@
   alias: "Sunrise Wake-Up Light"
   description: >-
     Gradually turns on a light over 10 minutes, incrementing brightness
-    by 1 point at a time (1→255) while shifting color from warm red
-    through orange and soft yellow to bright daylight white — simulating
+    by 1 point at a time (1→255) while shifting color temperature from
+    warm candlelight (2000K) to bright daylight (6500K) — simulating
     a sunrise to wake you up naturally.
   trigger:
     - platform: time
@@ -19,7 +19,7 @@
         entity_id: light.bedroom
       data:
         brightness: 1
-        rgb_color: [255, 60, 10]
+        color_temp_kelvin: 2000
     - repeat:
         count: 254
         sequence:
@@ -30,8 +30,5 @@
               entity_id: light.bedroom
             data:
               brightness: "{{ repeat.index + 1 }}"
-              rgb_color:
-                - 255
-                - "{{ (60 + (repeat.index / 254 * 195)) | int }}"
-                - "{{ (10 + (repeat.index / 254 * 210)) | int }}"
+              color_temp_kelvin: "{{ (2000 + (repeat.index / 254 * 4500)) | int }}"
   mode: single
