@@ -67,7 +67,7 @@ async def run_all():
     ]
     if config.media_server and config.media_server.plugin == "jellyfin":
         tasks.append(jellyfin_main(config))
-    if config.home_assistant:
+    if config.home_assistant.enabled:
         tasks.append(home_assistant_main(config))
     await asyncio.gather(*tasks)
 

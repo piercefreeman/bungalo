@@ -92,6 +92,7 @@ class MediaServerConfig(BaseSettings):
 
 
 class HomeAssistantConfig(BaseSettings):
+    enabled: bool = False
     port: int = 8123
 
 
@@ -150,7 +151,7 @@ class BungaloConfig(BaseSettings):
     media_server: MediaServerConfig | None = None
 
     # Home automation
-    home_assistant: HomeAssistantConfig | None = None
+    home_assistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
 
     # Validate that all of the remote files that were validated to NAS files or
     # B2 accounts match the nicknames that we have specified

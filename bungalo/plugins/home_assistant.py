@@ -120,8 +120,8 @@ async def main(config: BungaloConfig) -> None:
     )
 
     ha_config = config.home_assistant
-    if not ha_config:
-        raise ValueError("Home Assistant config not defined")
+    if not ha_config.enabled:
+        raise ValueError("Home Assistant is not enabled in config")
 
     await _ensure_docker_ready()
 
