@@ -14,6 +14,7 @@ from bungalo.constants import DEFAULT_CONFIG_FILE
 from bungalo.dashboard import start_dashboard_services
 from bungalo.io import async_to_sync
 from bungalo.nut.cli import main as battery_main
+from bungalo.plugins.home_assistant import main as home_assistant_main
 from bungalo.plugins.jellyfin import main as jellyfin_main
 from bungalo.ssh import main as ssh_main
 
@@ -66,6 +67,8 @@ async def run_all():
     ]
     if config.media_server and config.media_server.plugin == "jellyfin":
         tasks.append(jellyfin_main(config))
+    if config.home_assistant.enabled:
+        tasks.append(home_assistant_main(config))
     await asyncio.gather(*tasks)
 
 
@@ -106,6 +109,14 @@ async def jellyfin():
     """Launch the Jellyfin media server plugin."""
     config = get_config()
     await jellyfin_main(config)
+
+
+@cli.command()
+@async_to_sync
+async def home_assistant():
+    """Launch the Home Assistant container."""
+    config = get_config()
+    await home_assistant_main(config)
 
 
 def get_config():

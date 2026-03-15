@@ -49,3 +49,7 @@ self_ip = "100.64.0.10"
 [[media_server.mounts]]
   name = "tv"
   path = "nas:unifi-nas://Media/TV"
+
+[home_assistant]
+  enabled = true
+  # port = 8123  # default Home Assistant port

@@ -96,6 +96,27 @@ Mounts are published to the container as read-only volumes so Jellyfin can index
 
 **Architecture:** Jellyfin runs via Docker-in-Docker (DinD). When the Bungalo container starts, it launches an inner Docker daemon that Jellyfin uses. This allows Jellyfin to access the NAS shares that Bungalo mounts (via SMB/FUSE) inside the container, solving the sibling-container volume mounting problem. The inner Docker daemon uses the `vfs` storage driver for simplicity and runs in privileged mode.
 
+### Home Assistant
+
+Enable Home Assistant by setting `enabled = true` in your config:
+
+```toml
+[home_assistant]
+  enabled = true
+```
+
+Bungalo launches two containers via Docker-in-Docker: the Home Assistant core container and a [Matter Server](https://github.com/matter-js/python-matter-server) sidecar for Matter device support. Both run on host network.
+
+On first launch, Bungalo seeds a set of starter configuration files into `~/.bungalo/home_assistant/config/`, including a sunrise wake-up automation and a matching manual script. These are only written if the files don't already exist — your customizations are never overwritten.
+
+The bundled automations reference a placeholder `light.bedroom` entity. You'll need to update them to match your actual devices, either by editing the YAML files directly in `~/.bungalo/home_assistant/config/` or through the Home Assistant UI under **Settings → Automations & Scenes**. The same applies for any new integrations (Hue, Zigbee, etc.) — configure those through the HA UI at **Settings → Devices & Services**.
+
+A standalone command is also available:
+
+```bash
+bungalo home-assistant
+```
+
 ## Future Work
 
 - Unifi devices don't support wake-on-lan, so once they're shutdown there's no way to remotely start them back up. We'll have to combine it with a remotely controllable Power Distribution Unit if we want to add the restart behavior.
@@ -134,6 +155,7 @@ make test -- -k test_fully_parameterized_config
      --network host \
      --device=/dev/bus/usb \
      -v ~/.bungalo:/root/.bungalo \
+     -v ~/.bungalo/docker:/var/lib/docker \
      -v /dev/bus/usb:/dev/bus/usb \
      --cap-add=SYS_ADMIN \
      --device /dev/fuse \
@@ -145,6 +167,7 @@ make test -- -k test_fully_parameterized_config
    - `--network host`: Allows direct access to host network for SSH operations
    - `-v /var/run/docker.sock:/var/run/docker.sock`: **No longer needed** - we use Docker-in-Docker for Jellyfin instead of the host daemon
    - `-v ~/.bungalo:/root/.bungalo`: Mounts your config directory
+   - `-v ~/.bungalo/docker:/var/lib/docker`: Persists the inner Docker daemon's layer cache so container images (Jellyfin, Home Assistant) survive restarts
    - `-v /dev/bus/usb:/dev/bus/usb`: Mounts USB devices
    - `--cap-add=SYS_ADMIN` and `--device /dev/fuse`: Required for FUSE mounts (NAS shares)
 
@@ -156,6 +179,7 @@ make test -- -k test_fully_parameterized_config
         --network host \
         --device=/dev/bus/usb \
         -v ~/.bungalo:/root/.bungalo \
+        -v ~/.bungalo/docker:/var/lib/docker \
         -v /dev/bus/usb:/dev/bus/usb \
         --cap-add=SYS_ADMIN \
         --device /dev/fuse \

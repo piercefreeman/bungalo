@@ -6,6 +6,15 @@ set -e
 
 echo "Starting Docker daemon for Docker-in-Docker..."
 
+# Clean up stale PID file from a previous container run
+if [ -f /var/run/docker.pid ]; then
+    OLD_PID=$(cat /var/run/docker.pid)
+    if ! kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "Removing stale Docker PID file (PID $OLD_PID no longer running)"
+        rm -f /var/run/docker.pid
+    fi
+fi
+
 # Start Docker daemon in the background
 # Configuration is loaded from /etc/docker/daemon.json
 dockerd >/var/log/dockerd.log 2>&1 &

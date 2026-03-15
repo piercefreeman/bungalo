@@ -275,6 +275,49 @@ function SystemMetricsCard({
                 </p>
               )}
             </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                Disk
+              </p>
+              <p className="text-lg font-semibold text-foreground">
+                {formatBytes(metrics.disk.used)} /{" "}
+                {formatBytes(metrics.disk.total)}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {Math.min(metrics.disk.percent, 100).toFixed(1)}% used •{" "}
+                {formatBytes(metrics.disk.free)} free
+              </p>
+              <div className="h-2 w-full rounded-full bg-muted">
+                <div
+                  className="h-2 rounded-full bg-violet-500 transition-all"
+                  style={{ width: `${Math.min(metrics.disk.percent, 100)}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                Network
+              </p>
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <p className="text-xs text-muted-foreground">Download</p>
+                  <p className="text-lg font-semibold text-foreground">
+                    {formatBytes(metrics.network.bytes_recv_per_sec)}/s
+                  </p>
+                </div>
+                <div className="flex-1">
+                  <p className="text-xs text-muted-foreground">Upload</p>
+                  <p className="text-lg font-semibold text-foreground">
+                    {formatBytes(metrics.network.bytes_sent_per_sec)}/s
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Total: {formatBytes(metrics.network.bytes_recv_total)} down • {formatBytes(metrics.network.bytes_sent_total)} up
+              </p>
+            </div>
           </div>
 
           <div className="space-y-3">
@@ -391,7 +434,7 @@ export function DashboardClient({ host }: { host: string }) {
           </Card>
         ) : null}
 
-        <section className="grid gap-4 md:grid-cols-2">
+        <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           <Card className="transition-all hover:shadow-lg cursor-pointer">
             <a href="/" className="block">
               <CardHeader>
@@ -406,26 +449,49 @@ export function DashboardClient({ host }: { host: string }) {
             </a>
           </Card>
 
-          <Card className="transition-all hover:shadow-lg cursor-pointer">
-            <a 
-              href={`http://${hostname}:8096`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block"
-            >
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-xl">Media Server</CardTitle>
-                  <svg className="h-4 w-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                </div>
-                <CardDescription>
-                  Access your media library
-                </CardDescription>
-              </CardHeader>
-            </a>
-          </Card>
+          {(() => {
+            const externalServices = [
+              { key: "jellyfin", title: "Media Server", description: "Access your media library", port: 8096 },
+              { key: "home_assistant", title: "Home Assistant", description: "Home automation and smart devices", port: 8123 },
+            ];
+            const portStatus = data?.port_status ?? {};
+            return externalServices.map((svc) => {
+              const reachable = portStatus[svc.key] ?? false;
+              return (
+                <Card
+                  key={svc.key}
+                  className={`transition-all ${reachable ? "hover:shadow-lg cursor-pointer" : "opacity-50 cursor-default"}`}
+                >
+                  {reachable ? (
+                    <a
+                      href={`http://${hostname}:${svc.port}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block"
+                    >
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="text-xl">{svc.title}</CardTitle>
+                          <svg className="h-4 w-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </div>
+                        <CardDescription>{svc.description}</CardDescription>
+                      </CardHeader>
+                    </a>
+                  ) : (
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-xl">{svc.title}</CardTitle>
+                        <StatusBadge state="offline" />
+                      </div>
+                      <CardDescription>{svc.description}</CardDescription>
+                    </CardHeader>
+                  )}
+                </Card>
+              );
+            });
+          })()}
         </section>
 
         <SystemMetricsCard metrics={data?.system ?? null} />

@@ -46,6 +46,18 @@ export interface SystemMetrics {
     free: number;
     percent: number;
   };
+  disk: {
+    total: number;
+    used: number;
+    free: number;
+    percent: number;
+  };
+  network: {
+    bytes_sent_per_sec: number;
+    bytes_recv_per_sec: number;
+    bytes_sent_total: number;
+    bytes_recv_total: number;
+  };
   processes: ProcessMetric[];
 }
 
@@ -71,6 +83,7 @@ export interface AppState {
   services: ServiceStatus[];
   tasks: TaskState[];
   system?: SystemMetrics | SystemMetricsError;
+  port_status?: Record<string, boolean>;
 }
 
 function resolveApiBase(): string {
