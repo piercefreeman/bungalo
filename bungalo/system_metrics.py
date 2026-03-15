@@ -60,6 +60,7 @@ def _collect_metrics_sync() -> dict[str, Any]:
 
     memory = psutil.virtual_memory()
     swap = psutil.swap_memory()
+    disk = psutil.disk_usage("/")
     processes = _collect_top_processes()
 
     return {
@@ -89,6 +90,12 @@ def _collect_metrics_sync() -> dict[str, Any]:
             "used": swap.used,
             "free": swap.free,
             "percent": swap.percent,
+        },
+        "disk": {
+            "total": disk.total,
+            "used": disk.used,
+            "free": disk.free,
+            "percent": disk.percent,
         },
         "processes": processes,
     }

@@ -275,6 +275,26 @@ function SystemMetricsCard({
                 </p>
               )}
             </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                Disk
+              </p>
+              <p className="text-lg font-semibold text-foreground">
+                {formatBytes(metrics.disk.used)} /{" "}
+                {formatBytes(metrics.disk.total)}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {Math.min(metrics.disk.percent, 100).toFixed(1)}% used •{" "}
+                {formatBytes(metrics.disk.free)} free
+              </p>
+              <div className="h-2 w-full rounded-full bg-muted">
+                <div
+                  className="h-2 rounded-full bg-violet-500 transition-all"
+                  style={{ width: `${Math.min(metrics.disk.percent, 100)}%` }}
+                />
+              </div>
+            </div>
           </div>
 
           <div className="space-y-3">
