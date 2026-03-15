@@ -10,7 +10,7 @@ from bungalo.logger import CONSOLE
 from bungalo.slack import SlackClient
 
 HOME_ASSISTANT_IMAGE = "ghcr.io/home-assistant/home-assistant:stable"
-MATTER_SERVER_IMAGE = "ghcr.io/home-assistant-libs/python-matter-server:stable"
+MATTER_SERVER_IMAGE = "ghcr.io/matter-js/python-matter-server:stable"
 CONTAINER_NAME = "bungalo-home-assistant"
 MATTER_CONTAINER_NAME = "bungalo-matter-server"
 DOCKER_READY_TIMEOUT = 60  # seconds
