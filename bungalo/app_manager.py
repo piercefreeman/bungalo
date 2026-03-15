@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar, Dict, Optional
 
 from bungalo.logger import LOGGER
+from bungalo.port_check import check_ports
 from bungalo.system_metrics import collect_system_metrics
 
 
@@ -80,6 +81,10 @@ class AppTask:
 class AppManager:
     _instance: ClassVar[Optional["AppManager"]] = None
 
+    # Map of label → port for services that expose HTTP ports.
+    # Checked on each /api/state request to report reachability.
+    _port_checks: ClassVar[Dict[str, int]] = {}
+
     def __init__(self):
         self._lock = asyncio.Lock()
         self._services: Dict[str, ServiceStatus] = {}
@@ -89,6 +94,11 @@ class AppManager:
         self.dashboard_base_url = os.environ.get(
             "BUNGALO_DASHBOARD_URL", "http://localhost:80"
         )
+
+    @classmethod
+    def register_port_check(cls, name: str, port: int) -> None:
+        """Register a service port to be polled for reachability."""
+        cls._port_checks[name] = port
 
     @classmethod
     def get(cls) -> "AppManager":
@@ -261,6 +271,9 @@ class AppManager:
         except Exception as exc:  # pragma: no cover - defensive fallback
             LOGGER.error("Failed to collect system metrics: %s", exc)
             state["system"] = {"error": str(exc)}
+
+        if self._port_checks:
+            state["port_status"] = await check_ports(self._port_checks)
 
         return state
 

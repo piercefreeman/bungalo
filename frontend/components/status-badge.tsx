@@ -10,6 +10,7 @@ const statusVariant: Record<string, "default" | "secondary" | "destructive" | "o
   error: "destructive",
   failed: "destructive",
   warning: "outline",
+  offline: "outline",
   pending: "outline",
   submitted: "secondary",
 };

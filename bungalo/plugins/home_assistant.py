@@ -113,13 +113,15 @@ async def main(config: BungaloConfig) -> None:
     """
     app_manager = AppManager.get()
     service_name = "home_assistant"
+
+    ha_config = config.home_assistant
+    AppManager.register_port_check("home_assistant", ha_config.port)
+
     slack_client = SlackClient(
         app_token=config.slack.app_token,
         bot_token=config.slack.bot_token,
         channel_id=config.slack.channel,
     )
-
-    ha_config = config.home_assistant
     if not ha_config.enabled:
         raise ValueError("Home Assistant is not enabled in config")
 

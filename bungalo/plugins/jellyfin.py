@@ -167,6 +167,7 @@ async def main(config: BungaloConfig) -> None:
     NAS shares via volume mounts.
     """
     app_manager = AppManager.get()
+    AppManager.register_port_check("jellyfin", 8096)
     service_name = "jellyfin"
     slack_client = SlackClient(
         app_token=config.slack.app_token,

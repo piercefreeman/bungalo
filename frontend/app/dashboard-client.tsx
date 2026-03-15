@@ -406,47 +406,49 @@ export function DashboardClient({ host }: { host: string }) {
             </a>
           </Card>
 
-          <Card className="transition-all hover:shadow-lg cursor-pointer">
-            <a
-              href={`http://${hostname}:8096`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block"
-            >
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-xl">Media Server</CardTitle>
-                  <svg className="h-4 w-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                </div>
-                <CardDescription>
-                  Access your media library
-                </CardDescription>
-              </CardHeader>
-            </a>
-          </Card>
-
-          <Card className="transition-all hover:shadow-lg cursor-pointer">
-            <a
-              href={`http://${hostname}:8123`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block"
-            >
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-xl">Home Assistant</CardTitle>
-                  <svg className="h-4 w-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                </div>
-                <CardDescription>
-                  Home automation and smart devices
-                </CardDescription>
-              </CardHeader>
-            </a>
-          </Card>
+          {(() => {
+            const externalServices = [
+              { key: "jellyfin", title: "Media Server", description: "Access your media library", port: 8096 },
+              { key: "home_assistant", title: "Home Assistant", description: "Home automation and smart devices", port: 8123 },
+            ];
+            const portStatus = data?.port_status ?? {};
+            return externalServices.map((svc) => {
+              const reachable = portStatus[svc.key] ?? false;
+              return (
+                <Card
+                  key={svc.key}
+                  className={`transition-all ${reachable ? "hover:shadow-lg cursor-pointer" : "opacity-50 cursor-default"}`}
+                >
+                  {reachable ? (
+                    <a
+                      href={`http://${hostname}:${svc.port}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block"
+                    >
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="text-xl">{svc.title}</CardTitle>
+                          <svg className="h-4 w-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </div>
+                        <CardDescription>{svc.description}</CardDescription>
+                      </CardHeader>
+                    </a>
+                  ) : (
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-xl">{svc.title}</CardTitle>
+                        <StatusBadge state="offline" />
+                      </div>
+                      <CardDescription>{svc.description}</CardDescription>
+                    </CardHeader>
+                  )}
+                </Card>
+              );
+            });
+          })()}
         </section>
 
         <SystemMetricsCard metrics={data?.system ?? null} />

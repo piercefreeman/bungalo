@@ -71,6 +71,7 @@ export interface AppState {
   services: ServiceStatus[];
   tasks: TaskState[];
   system?: SystemMetrics | SystemMetricsError;
+  port_status?: Record<string, boolean>;
 }
 
 function resolveApiBase(): string {
