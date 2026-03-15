@@ -295,6 +295,29 @@ function SystemMetricsCard({
                 />
               </div>
             </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                Network
+              </p>
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <p className="text-xs text-muted-foreground">Download</p>
+                  <p className="text-lg font-semibold text-foreground">
+                    {formatBytes(metrics.network.bytes_recv_per_sec)}/s
+                  </p>
+                </div>
+                <div className="flex-1">
+                  <p className="text-xs text-muted-foreground">Upload</p>
+                  <p className="text-lg font-semibold text-foreground">
+                    {formatBytes(metrics.network.bytes_sent_per_sec)}/s
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Total: {formatBytes(metrics.network.bytes_recv_total)} down • {formatBytes(metrics.network.bytes_sent_total)} up
+              </p>
+            </div>
           </div>
 
           <div className="space-y-3">

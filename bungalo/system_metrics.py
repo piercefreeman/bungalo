@@ -46,7 +46,16 @@ def _collect_top_processes() -> list[dict[str, Any]]:
 
 
 def _collect_metrics_sync() -> dict[str, Any]:
+    # Snapshot network counters before the CPU sampling delay so we can
+    # compute throughput rates over the same interval.
+    net_before = psutil.net_io_counters()
+    net_time_before = time.monotonic()
+
     cpu_per_core = psutil.cpu_percent(interval=0.1, percpu=True)
+
+    net_after = psutil.net_io_counters()
+    net_elapsed = time.monotonic() - net_time_before
+
     load_average = None
     try:
         load_values = getattr(psutil, "getloadavg", os.getloadavg)()
@@ -96,6 +105,12 @@ def _collect_metrics_sync() -> dict[str, Any]:
             "used": disk.used,
             "free": disk.free,
             "percent": disk.percent,
+        },
+        "network": {
+            "bytes_sent_per_sec": (net_after.bytes_sent - net_before.bytes_sent) / net_elapsed,
+            "bytes_recv_per_sec": (net_after.bytes_recv - net_before.bytes_recv) / net_elapsed,
+            "bytes_sent_total": net_after.bytes_sent,
+            "bytes_recv_total": net_after.bytes_recv,
         },
         "processes": processes,
     }

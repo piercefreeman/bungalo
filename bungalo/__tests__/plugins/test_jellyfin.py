@@ -97,9 +97,11 @@ async def test_jellyfin_plugin_mounts_and_runs(
 
     await jellyfin.main(config)
 
-    # Docker readiness check plus cleanup and run commands should be executed
-    assert len(commands) == 3
+    # Docker readiness check, pull, cleanup, and run commands should be executed
+    assert len(commands) == 4
     assert commands[0][0:2] == ("docker", "info")
+    assert commands[1][0:2] == ("docker", "pull")
+    assert jellyfin.JELLYFIN_IMAGE in commands[1]
     run_cmd = commands[-1]
     assert run_cmd[0:2] == ("docker", "run")
     assert jellyfin.JELLYFIN_IMAGE in run_cmd

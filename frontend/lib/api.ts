@@ -52,6 +52,12 @@ export interface SystemMetrics {
     free: number;
     percent: number;
   };
+  network: {
+    bytes_sent_per_sec: number;
+    bytes_recv_per_sec: number;
+    bytes_sent_total: number;
+    bytes_recv_total: number;
+  };
   processes: ProcessMetric[];
 }
 

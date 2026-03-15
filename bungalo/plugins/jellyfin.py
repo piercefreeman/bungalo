@@ -318,21 +318,36 @@ async def main(config: BungaloConfig) -> None:
             JELLYFIN_IMAGE,
         ]
 
+        CONSOLE.print(f"Pulling Jellyfin image '{JELLYFIN_IMAGE}'")
+        await app_manager.update_service(
+            service_name,
+            state="pulling",
+            detail=f"Pulling image {JELLYFIN_IMAGE}",
+        )
+        pull_process = await asyncio.create_subprocess_exec(
+            "docker", "pull", JELLYFIN_IMAGE,
+        )
+        pull_rc = await pull_process.wait()
+        if pull_rc:
+            await app_manager.update_service(
+                service_name,
+                state="error",
+                detail=f"Failed to pull image {JELLYFIN_IMAGE} (exit code {pull_rc})",
+            )
+            raise RuntimeError(
+                f"Failed to pull Jellyfin image (exit code {pull_rc})"
+            )
+
         CONSOLE.print(
-            f"Starting Jellyfin container '{CONTAINER_NAME}' with image '{JELLYFIN_IMAGE}'"
+            f"Starting Jellyfin container '{CONTAINER_NAME}'"
         )
         await _remove_existing_container()
         await app_manager.update_service(
             service_name,
             state="running",
-            detail="Starting Jellyfin media server container",
-        )
-        process = await asyncio.create_subprocess_exec(*docker_cmd)
-        await app_manager.update_service(
-            service_name,
-            state="running",
             detail="Jellyfin media server running",
         )
+        process = await asyncio.create_subprocess_exec(*docker_cmd)
         jellyfin_host = os.environ.get("JELLYFIN_EXTERNAL_HOST") or (
             f"http://{config.root.self_ip}:8096"
             if config.root.self_ip

@@ -148,22 +148,34 @@ async def main(config: BungaloConfig) -> None:
         HOME_ASSISTANT_IMAGE,
     ]
 
-    CONSOLE.print(
-        f"Starting Home Assistant container '{CONTAINER_NAME}' "
-        f"with image '{HOME_ASSISTANT_IMAGE}'"
-    )
-    await _remove_existing_container()
+    CONSOLE.print(f"Pulling Home Assistant image '{HOME_ASSISTANT_IMAGE}'")
     await app_manager.update_service(
         service_name,
-        state="running",
-        detail="Starting Home Assistant container",
+        state="pulling",
+        detail=f"Pulling image {HOME_ASSISTANT_IMAGE}",
     )
-    process = await asyncio.create_subprocess_exec(*docker_cmd)
+    pull_process = await asyncio.create_subprocess_exec(
+        "docker", "pull", HOME_ASSISTANT_IMAGE,
+    )
+    pull_rc = await pull_process.wait()
+    if pull_rc:
+        await app_manager.update_service(
+            service_name,
+            state="error",
+            detail=f"Failed to pull image {HOME_ASSISTANT_IMAGE} (exit code {pull_rc})",
+        )
+        raise RuntimeError(
+            f"Failed to pull Home Assistant image (exit code {pull_rc})"
+        )
+
+    CONSOLE.print(f"Starting Home Assistant container '{CONTAINER_NAME}'")
+    await _remove_existing_container()
     await app_manager.update_service(
         service_name,
         state="running",
         detail="Home Assistant running",
     )
+    process = await asyncio.create_subprocess_exec(*docker_cmd)
 
     ha_port = ha_config.port
     ha_host = os.environ.get("HOME_ASSISTANT_EXTERNAL_HOST") or (
