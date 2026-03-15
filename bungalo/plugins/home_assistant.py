@@ -10,7 +10,9 @@ from bungalo.logger import CONSOLE
 from bungalo.slack import SlackClient
 
 HOME_ASSISTANT_IMAGE = "ghcr.io/home-assistant/home-assistant:stable"
+MATTER_SERVER_IMAGE = "ghcr.io/home-assistant-libs/python-matter-server:stable"
 CONTAINER_NAME = "bungalo-home-assistant"
+MATTER_CONTAINER_NAME = "bungalo-matter-server"
 DOCKER_READY_TIMEOUT = 60  # seconds
 
 
@@ -21,17 +23,19 @@ def _get_root() -> Path:
     ).expanduser()
 
 
-def _ensure_directories() -> Path:
+def _ensure_directories() -> tuple[Path, Path]:
     """
     Ensure the default directory structure required for Home Assistant exists.
 
     Returns:
-        The config directory path.
+        Tuple of (config_dir, matter_data_dir).
     """
     root = _get_root()
     config_dir = root / "config"
+    matter_data_dir = root / "matter"
     config_dir.mkdir(parents=True, exist_ok=True)
-    return config_dir
+    matter_data_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir, matter_data_dir
 
 
 def _seed_default_config(config_dir: Path) -> None:
@@ -92,24 +96,73 @@ async def _ensure_docker_ready() -> None:
     )
 
 
-async def _remove_existing_container() -> None:
-    """Best-effort removal of an existing Home Assistant container with our managed name."""
+async def _remove_existing_container(name: str) -> None:
+    """Best-effort removal of an existing container by name."""
     process = await asyncio.create_subprocess_exec(
         "docker",
         "rm",
         "-f",
-        CONTAINER_NAME,
+        name,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
     await process.wait()
 
 
+async def _pull_image(image: str, service_name: str, app_manager: AppManager) -> None:
+    """Pull a Docker image, updating service status."""
+    CONSOLE.print(f"Pulling image '{image}'")
+    await app_manager.update_service(
+        service_name,
+        state="pulling",
+        detail=f"Pulling image {image}",
+    )
+    pull_process = await asyncio.create_subprocess_exec(
+        "docker",
+        "pull",
+        image,
+    )
+    pull_rc = await pull_process.wait()
+    if pull_rc:
+        await app_manager.update_service(
+            service_name,
+            state="error",
+            detail=f"Failed to pull image {image} (exit code {pull_rc})",
+        )
+        raise RuntimeError(f"Failed to pull {image} (exit code {pull_rc})")
+
+
+async def _start_matter_server(matter_data_dir: Path) -> asyncio.subprocess.Process:
+    """Launch the Matter Server container and return the process handle."""
+    timezone = os.environ.get("TZ", "UTC")
+
+    matter_cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        MATTER_CONTAINER_NAME,
+        "--network",
+        "host",
+        "--privileged",
+        "-e",
+        f"TZ={timezone}",
+        "-v",
+        f"{matter_data_dir}:/data",
+        MATTER_SERVER_IMAGE,
+    ]
+
+    CONSOLE.print(f"Starting Matter Server container '{MATTER_CONTAINER_NAME}'")
+    await _remove_existing_container(MATTER_CONTAINER_NAME)
+    return await asyncio.create_subprocess_exec(*matter_cmd)
+
+
 async def main(config: BungaloConfig) -> None:
     """
-    Launch the Home Assistant container via Docker-in-Docker.
+    Launch the Home Assistant and Matter Server containers via Docker-in-Docker.
 
-    Home Assistant runs on host network with a persistent config volume.
+    Both containers run on host network. The Matter Server listens on port 5580
+    and Home Assistant connects to it for Matter device support.
     """
     app_manager = AppManager.get()
     service_name = "home_assistant"
@@ -127,10 +180,17 @@ async def main(config: BungaloConfig) -> None:
 
     await _ensure_docker_ready()
 
-    config_dir = _ensure_directories()
+    config_dir, matter_data_dir = _ensure_directories()
     _seed_default_config(config_dir)
 
     timezone = os.environ.get("TZ", "UTC")
+
+    # Pull both images
+    await _pull_image(MATTER_SERVER_IMAGE, service_name, app_manager)
+    await _pull_image(HOME_ASSISTANT_IMAGE, service_name, app_manager)
+
+    # Start Matter Server first so it's ready when HA boots
+    matter_process = await _start_matter_server(matter_data_dir)
 
     docker_cmd = [
         "docker",
@@ -148,34 +208,14 @@ async def main(config: BungaloConfig) -> None:
         HOME_ASSISTANT_IMAGE,
     ]
 
-    CONSOLE.print(f"Pulling Home Assistant image '{HOME_ASSISTANT_IMAGE}'")
-    await app_manager.update_service(
-        service_name,
-        state="pulling",
-        detail=f"Pulling image {HOME_ASSISTANT_IMAGE}",
-    )
-    pull_process = await asyncio.create_subprocess_exec(
-        "docker",
-        "pull",
-        HOME_ASSISTANT_IMAGE,
-    )
-    pull_rc = await pull_process.wait()
-    if pull_rc:
-        await app_manager.update_service(
-            service_name,
-            state="error",
-            detail=f"Failed to pull image {HOME_ASSISTANT_IMAGE} (exit code {pull_rc})",
-        )
-        raise RuntimeError(f"Failed to pull Home Assistant image (exit code {pull_rc})")
-
     CONSOLE.print(f"Starting Home Assistant container '{CONTAINER_NAME}'")
-    await _remove_existing_container()
+    await _remove_existing_container(CONTAINER_NAME)
     await app_manager.update_service(
         service_name,
         state="running",
         detail="Home Assistant running",
     )
-    process = await asyncio.create_subprocess_exec(*docker_cmd)
+    ha_process = await asyncio.create_subprocess_exec(*docker_cmd)
 
     ha_port = ha_config.port
     ha_host = os.environ.get("HOME_ASSISTANT_EXTERNAL_HOST") or (
@@ -184,17 +224,34 @@ async def main(config: BungaloConfig) -> None:
         else f"http://127.0.0.1:{ha_port}"
     )
     await slack_client.create_status(f"Home Assistant is now running → {ha_host}")
-    returncode = await process.wait()
+
+    # Wait for either container to exit
+    done, _ = await asyncio.wait(
+        [
+            asyncio.create_task(ha_process.wait()),
+            asyncio.create_task(matter_process.wait()),
+        ],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    # If HA exited, clean up Matter Server too
+    if ha_process.returncode is not None:
+        await _remove_existing_container(MATTER_CONTAINER_NAME)
+        returncode = ha_process.returncode
+    else:
+        # Matter Server exited unexpectedly — report but keep HA running
+        await _remove_existing_container(CONTAINER_NAME)
+        returncode = matter_process.returncode
 
     if returncode:
         await app_manager.update_service(
             service_name,
             state="error",
-            detail=f"Home Assistant container exited with code {returncode}",
+            detail=f"Home Assistant exited with code {returncode}",
         )
-        raise RuntimeError(f"Home Assistant container exited with code {returncode}")
+        raise RuntimeError(f"Home Assistant exited with code {returncode}")
     await app_manager.update_service(
         service_name,
         state="completed",
-        detail="Home Assistant container stopped",
+        detail="Home Assistant stopped",
     )
