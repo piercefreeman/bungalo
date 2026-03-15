@@ -22,5 +22,6 @@ docker run -d \
      --cap-add=SYS_ADMIN \
      --device /dev/fuse \
      -v ~/.bungalo:/root/.bungalo \
+     -v ~/.bungalo/docker:/var/lib/docker \
      -v /dev/bus/usb:/dev/bus/usb \
      ghcr.io/piercefreeman/bungalo:latest

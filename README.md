@@ -134,6 +134,7 @@ make test -- -k test_fully_parameterized_config
      --network host \
      --device=/dev/bus/usb \
      -v ~/.bungalo:/root/.bungalo \
+     -v ~/.bungalo/docker:/var/lib/docker \
      -v /dev/bus/usb:/dev/bus/usb \
      --cap-add=SYS_ADMIN \
      --device /dev/fuse \
@@ -145,6 +146,7 @@ make test -- -k test_fully_parameterized_config
    - `--network host`: Allows direct access to host network for SSH operations
    - `-v /var/run/docker.sock:/var/run/docker.sock`: **No longer needed** - we use Docker-in-Docker for Jellyfin instead of the host daemon
    - `-v ~/.bungalo:/root/.bungalo`: Mounts your config directory
+   - `-v ~/.bungalo/docker:/var/lib/docker`: Persists the inner Docker daemon's layer cache so container images (Jellyfin, Home Assistant) survive restarts
    - `-v /dev/bus/usb:/dev/bus/usb`: Mounts USB devices
    - `--cap-add=SYS_ADMIN` and `--device /dev/fuse`: Required for FUSE mounts (NAS shares)
 
@@ -156,6 +158,7 @@ make test -- -k test_fully_parameterized_config
         --network host \
         --device=/dev/bus/usb \
         -v ~/.bungalo:/root/.bungalo \
+        -v ~/.bungalo/docker:/var/lib/docker \
         -v /dev/bus/usb:/dev/bus/usb \
         --cap-add=SYS_ADMIN \
         --device /dev/fuse \
