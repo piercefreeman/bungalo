@@ -325,7 +325,9 @@ async def main(config: BungaloConfig) -> None:
             detail=f"Pulling image {JELLYFIN_IMAGE}",
         )
         pull_process = await asyncio.create_subprocess_exec(
-            "docker", "pull", JELLYFIN_IMAGE,
+            "docker",
+            "pull",
+            JELLYFIN_IMAGE,
         )
         pull_rc = await pull_process.wait()
         if pull_rc:
@@ -334,13 +336,9 @@ async def main(config: BungaloConfig) -> None:
                 state="error",
                 detail=f"Failed to pull image {JELLYFIN_IMAGE} (exit code {pull_rc})",
             )
-            raise RuntimeError(
-                f"Failed to pull Jellyfin image (exit code {pull_rc})"
-            )
+            raise RuntimeError(f"Failed to pull Jellyfin image (exit code {pull_rc})")
 
-        CONSOLE.print(
-            f"Starting Jellyfin container '{CONTAINER_NAME}'"
-        )
+        CONSOLE.print(f"Starting Jellyfin container '{CONTAINER_NAME}'")
         await _remove_existing_container()
         await app_manager.update_service(
             service_name,

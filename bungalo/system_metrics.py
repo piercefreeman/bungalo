@@ -107,8 +107,10 @@ def _collect_metrics_sync() -> dict[str, Any]:
             "percent": disk.percent,
         },
         "network": {
-            "bytes_sent_per_sec": (net_after.bytes_sent - net_before.bytes_sent) / net_elapsed,
-            "bytes_recv_per_sec": (net_after.bytes_recv - net_before.bytes_recv) / net_elapsed,
+            "bytes_sent_per_sec": (net_after.bytes_sent - net_before.bytes_sent)
+            / net_elapsed,
+            "bytes_recv_per_sec": (net_after.bytes_recv - net_before.bytes_recv)
+            / net_elapsed,
             "bytes_sent_total": net_after.bytes_sent,
             "bytes_recv_total": net_after.bytes_recv,
         },

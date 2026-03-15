@@ -155,7 +155,9 @@ async def main(config: BungaloConfig) -> None:
         detail=f"Pulling image {HOME_ASSISTANT_IMAGE}",
     )
     pull_process = await asyncio.create_subprocess_exec(
-        "docker", "pull", HOME_ASSISTANT_IMAGE,
+        "docker",
+        "pull",
+        HOME_ASSISTANT_IMAGE,
     )
     pull_rc = await pull_process.wait()
     if pull_rc:
@@ -164,9 +166,7 @@ async def main(config: BungaloConfig) -> None:
             state="error",
             detail=f"Failed to pull image {HOME_ASSISTANT_IMAGE} (exit code {pull_rc})",
         )
-        raise RuntimeError(
-            f"Failed to pull Home Assistant image (exit code {pull_rc})"
-        )
+        raise RuntimeError(f"Failed to pull Home Assistant image (exit code {pull_rc})")
 
     CONSOLE.print(f"Starting Home Assistant container '{CONTAINER_NAME}'")
     await _remove_existing_container()
@@ -192,9 +192,7 @@ async def main(config: BungaloConfig) -> None:
             state="error",
             detail=f"Home Assistant container exited with code {returncode}",
         )
-        raise RuntimeError(
-            f"Home Assistant container exited with code {returncode}"
-        )
+        raise RuntimeError(f"Home Assistant container exited with code {returncode}")
     await app_manager.update_service(
         service_name,
         state="completed",
