@@ -1,0 +1,13 @@
+# Bungalo-managed Home Assistant configuration
+# This file was seeded by bungalo on first launch.
+# Feel free to modify it — bungalo will not overwrite existing files.
+
+homeassistant:
+  name: Bungalo Home
+  unit_system: metric
+
+default_config:
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml

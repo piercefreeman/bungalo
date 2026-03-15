@@ -1,0 +1,37 @@
+# Bungalo-managed Home Assistant automations
+# This file was seeded by bungalo on first launch.
+# Feel free to modify it — bungalo will not overwrite existing files.
+
+- id: bungalo_sunrise_wake_up
+  alias: "Sunrise Wake-Up Light"
+  description: >-
+    Gradually turns on a light over 10 minutes, incrementing brightness
+    by 1 point at a time (1→255) while shifting color from warm red
+    through orange and soft yellow to bright daylight white — simulating
+    a sunrise to wake you up naturally.
+  trigger:
+    - platform: time
+      at: "07:00:00"
+  condition: []
+  action:
+    - service: light.turn_on
+      target:
+        entity_id: light.bedroom
+      data:
+        brightness: 1
+        rgb_color: [255, 60, 10]
+    - repeat:
+        count: 254
+        sequence:
+          - delay:
+              milliseconds: 2353
+          - service: light.turn_on
+            target:
+              entity_id: light.bedroom
+            data:
+              brightness: "{{ repeat.index + 1 }}"
+              rgb_color:
+                - 255
+                - "{{ (60 + (repeat.index / 254 * 195)) | int }}"
+                - "{{ (10 + (repeat.index / 254 * 210)) | int }}"
+  mode: single

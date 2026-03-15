@@ -91,6 +91,10 @@ class MediaServerConfig(BaseSettings):
         return self
 
 
+class HomeAssistantConfig(BaseSettings):
+    port: int = 8123
+
+
 class EndpointConfig(BaseSettings):
     b2: list[B2Endpoint] = []
     nas: list[NASEndpoint] = []
@@ -144,6 +148,9 @@ class BungaloConfig(BaseSettings):
 
     # Media servers (e.g., Jellyfin)
     media_server: MediaServerConfig | None = None
+
+    # Home automation
+    home_assistant: HomeAssistantConfig | None = None
 
     # Validate that all of the remote files that were validated to NAS files or
     # B2 accounts match the nicknames that we have specified

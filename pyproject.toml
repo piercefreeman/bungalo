@@ -25,6 +25,12 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["bungalo"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"bungalo/plugins/home_assistant_seed" = "bungalo/plugins/home_assistant_seed"
+
 [dependency-groups]
 dev = [
     "pyright>=1.1.399",
