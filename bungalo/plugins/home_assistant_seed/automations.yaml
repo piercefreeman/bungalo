@@ -7,12 +7,16 @@
   description: >-
     Gradually turns on a light over 10 minutes, incrementing brightness
     by 1 point at a time (1→255) while shifting color temperature from
-    warm candlelight (2000K) to bright daylight (6500K) — simulating
-    a sunrise to wake you up naturally.
+    warm candlelight (2000K) to bright daylight (6500K). Uses a
+    quadratic curve so the light lingers in warm tones and accelerates
+    through cooler temperatures — mimicking a real sunrise.
   trigger:
     - platform: time
       at: "07:00:00"
-  condition: []
+  condition:
+    - condition: state
+      entity_id: light.bedroom
+      state: "off"
   action:
     - service: light.turn_on
       target:
@@ -25,10 +29,13 @@
         sequence:
           - delay:
               milliseconds: 2353
+          - condition: state
+            entity_id: light.bedroom
+            state: "on"
           - service: light.turn_on
             target:
               entity_id: light.bedroom
             data:
               brightness: "{{ repeat.index + 1 }}"
-              color_temp_kelvin: "{{ (2000 + (repeat.index / 254 * 4500)) | int }}"
+              color_temp_kelvin: "{{ (2000 + ((repeat.index / 254) ** 2 * 4500)) | int }}"
   mode: single
