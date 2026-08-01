@@ -35,7 +35,9 @@ During steady state operation, we poll for the UPS status from our locally runni
 Our NAS is our network's source of truth for all files. For a full data backup, we conceptually have two separate steps:
 
 1. Cloud -> NAS: Sync proprietary clouds like iCloud, Frame.io, and iPhoto into our local storage.
-2. Syncing the full NAS contents to a remote cloud. We're currently architected with two redundency zones, one in Virginia and one in Amsterdam. We copy these files individually with rclone instead of using "Cloud Replication" so we have a bit more control over encryption keys and notification status of completed syncs.
+2. Syncing the full NAS contents to a remote cloud. We're currently architected with two redundancy zones, one in Virginia and one in Amsterdam. We use [`rclone sync`](https://rclone.org/commands/rclone_sync/) instead of "Cloud Replication" so we have more control over encryption keys and notification status. Sync makes the remote match the NAS, including removing remote files that were deleted locally; rclone suppresses destination deletes if the run encounters errors.
+
+Backblaze B2 keeps deleted files as hidden versions by default. Each backup bucket must have a [lifecycle rule](https://www.backblaze.com/docs/cloud-storage-lifecycle-rules) with `daysFromHidingToDeleting` set to `30`, retaining deleted and overwritten versions for 30 days before permanent deletion. Do not set `daysFromUploadingToHiding`, which would also expire current files that still exist on the NAS. Rclone documents the B2 version and deletion behavior in its [B2 backend guide](https://rclone.org/b2/#versions).
 
 Backups made to remote locations are encrypted via rclone's crypt provider:
 
