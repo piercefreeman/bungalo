@@ -222,7 +222,7 @@ class RCloneSync:
     async def _run_sync(self, src: str, dst: str, update_status: SlackMessage) -> None:
         process = await asyncio.create_subprocess_exec(
             "rclone",
-            "copy",
+            "sync",
             "--config",
             str(self.config_path),
             src,
