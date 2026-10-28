@@ -4,7 +4,7 @@ import typing as t
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from bungalo.config.paths import B2Path, FileLocation, NASPath
+from bungalo.config.paths import B2Path, FileLocation, NASPath, SFTPPath
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilities
@@ -14,7 +14,7 @@ from bungalo.config.paths import B2Path, FileLocation, NASPath
 FileLocationAdapter = TypeAdapter(FileLocation)
 
 
-def validate_file_location(v: str) -> B2Path | NASPath:
+def validate_file_location(v: str) -> FileLocation:
     return FileLocationAdapter.validate_python(v)
 
 
@@ -47,6 +47,9 @@ INVALID_URIS: list[str] = [
     "/absolute/filesystem/path.txt",  # no scheme at all
     "b2://account/bucket/key",  # old format
     "nas://account/drive/path",  # old format
+    "sftp://account/path",  # old format
+    "sftp::///srv/data",  # missing endpoint
+    "sftp:account://",  # missing path
 ]
 
 
@@ -72,6 +75,17 @@ def test_naspath_parse_roundtrip(
     assert (nas.endpoint_nickname, nas.drive_name, nas.path) == (nickname, drive, path)
     assert json.loads(nas.model_dump_json()) == uri
     assert str(nas) == uri
+
+
+@pytest.mark.parametrize("path", ["/srv/data", "data", "/", "data/", "/srv/my data/"])
+def test_sftp_path_roundtrip(path: str) -> None:
+    uri = f"sftp:server://{path}"
+    location = validate_file_location(uri)
+    assert isinstance(location, SFTPPath)
+    assert location.endpoint_nickname == "server"
+    assert location.full_path == path
+    assert FileLocationAdapter.dump_python(location) == uri
+    assert FileLocationAdapter.validate_python(location) is location
 
 
 # ─────────────────────────────────────────────────────────────────────────────

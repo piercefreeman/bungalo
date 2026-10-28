@@ -123,8 +123,27 @@ class FilePath(PathBase):
         return f"file:{self.endpoint_nickname}://{self.path}"
 
 
+class SFTPPath(PathBase):
+    @staticmethod
+    def _from_uri(v: str) -> dict[str, str]:
+        scheme, endpoint_nickname, _, _ = SFTPPath.parse_endpoint_uri(v)
+        if scheme != "sftp" or not endpoint_nickname.strip():
+            raise ValueError("sftp URI must be sftp:endpoint://path")
+        # Preserve leading/trailing slashes: SFTP distinguishes absolute and home-relative paths.
+        full_path = v.split("://", 1)[1]
+        if not full_path.strip():
+            raise ValueError("sftp URI must include a path (use / for root)")
+        return {
+            "endpoint_nickname": endpoint_nickname,
+            "full_path": full_path,
+        }
+
+    def __str__(self) -> str:
+        return f"sftp:{self.endpoint_nickname}://{self.full_path}"
+
+
 def _parse_file_location(v):
-    if isinstance(v, (B2Path, NASPath, FilePath)):
+    if isinstance(v, (B2Path, NASPath, FilePath, SFTPPath)):
         return v
     if not isinstance(v, str):
         raise TypeError("FileLocation expects a URI string")
@@ -139,9 +158,11 @@ def _parse_file_location(v):
         return NASPath._from_uri(v)
     if scheme == "file":
         return FilePath._from_uri(v)
+    if scheme == "sftp":
+        return SFTPPath._from_uri(v)
     raise ValueError(f"Unsupported URI scheme '{scheme}'")
 
 
 FileLocation = Annotated[
-    B2Path | NASPath | FilePath, BeforeValidator(_parse_file_location)
+    B2Path | NASPath | FilePath | SFTPPath, BeforeValidator(_parse_file_location)
 ]

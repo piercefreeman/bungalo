@@ -49,6 +49,32 @@ Backups made to remote locations are encrypted via rclone's crypt provider:
   encrypt_key = "custom_encryption_key"
 ```
 
+#### Remote server → NAS
+
+Remote servers can be pulled into a NAS folder through [rclone's SFTP backend](https://rclone.org/sftp/), using SSH key authentication. This runs through the existing `bungalo remote-backup` service (also included in `run-all`), with the same interval, dashboard status, and Slack notifications.
+
+Store an unencrypted private key at `~/.bungalo/ssh/remote-server` on the Docker host and authorize its public key for the remote server's backup user. Restrict the directory to mode `700` and the private key to mode `600`. Put the server's verified host-key entry in `~/.bungalo/ssh/known_hosts`; verify its fingerprint with the server operator before trusting it. For a custom port, the known-hosts entry uses `[server.example.com]:2222`. Missing or mismatched host keys fail the sync.
+
+`setup.sh` already mounts `~/.bungalo` at `/root/.bungalo`, so these files are available inside the container. Use their **container paths** in the config. To keep credentials outside that directory, add a read-only bind mount to your Docker command, for example `--mount type=bind,src=/absolute/ssh-directory,dst=/run/backup-ssh,readonly`, and use paths under `/run/backup-ssh` instead.
+
+```toml
+[[endpoints.sftp]]
+  nickname = "remote-server"
+  host = "server.example.com"
+  username = "backup"
+  port = 22
+  key_file = "/root/.bungalo/ssh/remote-server"
+  known_hosts_file = "/root/.bungalo/ssh/known_hosts"
+
+[[backups.sync]]
+  src = "sftp:remote-server:///srv/data"
+  dst = "nas:unifi-nas://Common_Drive/remote-server"
+```
+
+The third slash in `sftp:remote-server:///srv/data` makes `/srv/data` absolute. Use `sftp:remote-server://data` for a directory relative to the SSH user's home. Directory contents land directly in the destination folder. The server must support SFTP; it does not need rclone or rsync installed. This uses file-level SFTP transfers, not rsync's block-level delta protocol.
+
+Use a dedicated NAS destination: `sync` mirrors the source, including deleting destination files absent from the source. It does not preserve Unix ownership, permissions, or symlinks as a filesystem archive. This pair only writes to the NAS; it does not create a B2 backup. To include these files in your existing NAS → B2 backup, place this pair **before** the NAS → B2 pair in `backups.sync`, with its destination inside the NAS tree already backed up. Pairs run sequentially in configuration order; a failed pair is reported, and later pairs still run against the data available on the NAS.
+
 ### Authorized Keys
 
 The `SSHManager` manages a local bungalo ssh credential that we place into the bungalo owned folder at `~/.bungalo`.

@@ -16,8 +16,8 @@ from bungalo.config.config import (
     SyncPair,
     iPhotoBackupConfig,
 )
-from bungalo.config.endpoints import B2Endpoint, NASEndpoint
-from bungalo.config.paths import B2Path, NASPath
+from bungalo.config.endpoints import B2Endpoint, NASEndpoint, SFTPEndpoint
+from bungalo.config.paths import B2Path, NASPath, SFTPPath
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -164,6 +164,75 @@ def test_b2_endpoint() -> None:
 
     assert endpoint.validate_path(B2Path.model_validate(valid_path))
     assert not endpoint.validate_path(B2Path.model_validate(invalid_path))
+
+
+@pytest.fixture
+def sftp_endpoint_dict() -> dict[str, Any]:
+    return {
+        "nickname": "server",
+        "host": "server.example.com",
+        "username": "backup",
+        "key_file": "/run/ssh/private_key",
+        "known_hosts_file": "/run/ssh/known_hosts",
+    }
+
+
+def test_sftp_to_nas_without_b2(
+    config_dict: dict[str, Any], sftp_endpoint_dict: dict[str, Any]
+) -> None:
+    config_dict["endpoints"]["b2"] = []
+    config_dict["endpoints"]["sftp"] = [sftp_endpoint_dict]
+    config_dict["backups"]["sync"] = [
+        {"src": "sftp:server:///srv/data", "dst": "nas:nas1://drive1/server"}
+    ]
+    config = BungaloConfig.model_validate(config_dict)
+    endpoint = config.endpoints.sftp[0]
+    assert endpoint.port == 22
+    assert endpoint in config.endpoints.get_all()
+    assert isinstance(config.backups.sync[0].src, SFTPPath)
+    assert isinstance(config.backups.sync[0].dst, NASPath)
+    assert endpoint.validate_path(config.backups.sync[0].src)
+    assert not endpoint.validate_path(config.backups.sync[0].dst)
+    assert not config.endpoints.b2
+
+
+@pytest.mark.parametrize("nickname", ["missing", "nas1"])
+def test_sftp_path_requires_matching_endpoint(
+    config_dict: dict[str, Any], nickname: str
+) -> None:
+    config_dict["backups"]["sync"][0]["src"] = f"sftp:{nickname}:///srv/data"
+    with pytest.raises(ValidationError, match="SFTP endpoint nickname"):
+        BungaloConfig.model_validate(config_dict)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("host", ""),
+        ("username", "  "),
+        ("host", "server\ntype = local"),
+        ("key_file", ""),
+        ("known_hosts_file", ""),
+        ("known_hosts_file", "none"),
+        ("port", 0),
+        ("port", 65536),
+    ],
+)
+def test_invalid_sftp_connection_settings(
+    sftp_endpoint_dict: dict[str, Any], field: str, value: Any
+) -> None:
+    sftp_endpoint_dict[field] = value
+    with pytest.raises(ValidationError):
+        SFTPEndpoint.model_validate(sftp_endpoint_dict)
+
+
+@pytest.mark.parametrize("field", ["key_file", "known_hosts_file"])
+def test_sftp_credentials_are_required(
+    sftp_endpoint_dict: dict[str, Any], field: str
+) -> None:
+    del sftp_endpoint_dict[field]
+    with pytest.raises(ValidationError):
+        SFTPEndpoint.model_validate(sftp_endpoint_dict)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

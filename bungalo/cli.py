@@ -91,7 +91,7 @@ async def iphoto_backup():
 @cli.command()
 @async_to_sync
 async def remote_backup():
-    """Backup NAS files to a remote server using rclone."""
+    """Sync configured paths between SFTP servers, NAS shares, and backup storage."""
     config = get_config()
     await remote_main(config)
 

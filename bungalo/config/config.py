@@ -4,8 +4,8 @@ from typing import Literal, Sequence
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
-from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint
-from bungalo.config.paths import B2Path, FileLocation, NASPath
+from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint, SFTPEndpoint
+from bungalo.config.paths import B2Path, FileLocation, NASPath, SFTPPath
 
 
 class RootConfig(BaseSettings):
@@ -99,9 +99,10 @@ class HomeAssistantConfig(BaseSettings):
 class EndpointConfig(BaseSettings):
     b2: list[B2Endpoint] = []
     nas: list[NASEndpoint] = []
+    sftp: list[SFTPEndpoint] = []
 
     def get_all(self) -> Sequence[EndpointBase]:
-        return self.b2 + self.nas
+        return self.b2 + self.nas + self.sftp
 
 
 class SlackConfig(BaseSettings):
@@ -153,18 +154,16 @@ class BungaloConfig(BaseSettings):
     # Home automation
     home_assistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
 
-    # Validate that all of the remote files that were validated to NAS files or
-    # B2 accounts match the nicknames that we have specified
     @model_validator(mode="after")
     def _validate_file_locations(self):
         """
-        Walk the *entire* model tree, find every `B2Path`/`NASPath`, and
+        Walk the *entire* model tree, find every remote path, and
         ensure at least one matching endpoint accepts it.
         """
 
         def walk(obj):
-            """Yield every FileLocation object (B2Path | NASPath) in `obj`."""
-            if isinstance(obj, (B2Path, NASPath)):
+            """Yield every remote FileLocation object in `obj`."""
+            if isinstance(obj, (B2Path, NASPath, SFTPPath)):
                 yield obj
             elif isinstance(obj, BaseModel):
                 for field in obj.__class__.model_fields:
@@ -176,15 +175,12 @@ class BungaloConfig(BaseSettings):
                 for val in obj.values():
                     yield from walk(val)
 
+        endpoints = self.endpoints.get_all()
         for loc in walk(self):
-            endpoints: Sequence[B2Endpoint | NASEndpoint] = (
-                self.endpoints.b2 if isinstance(loc, B2Path) else self.endpoints.nas
-            )
-
             if not any(ep.validate_path(loc) for ep in endpoints):
                 raise ValueError(
                     f"File location {loc!s} does not match any configured "
-                    f"{'B2' if isinstance(loc, B2Path) else 'NAS'} endpoint nickname"
+                    f"{str(loc).split(':', 1)[0].upper()} endpoint nickname"
                 )
 
         return self
