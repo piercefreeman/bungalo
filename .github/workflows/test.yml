@@ -10,11 +10,8 @@ on:
 
 jobs:
   lint:
-    name: Python Lint & Type Check
+    name: Python Lint, Type Check & Tests
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -25,11 +22,19 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
 
       - name: Install dependencies
         run: |
           uv sync
 
       - name: Run linting and type checking
-        run: make lint CHECK_ONLY=true 
+        run: make lint CHECK_ONLY=true
+
+      - name: Run tests
+        run: make test
