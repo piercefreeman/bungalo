@@ -8,7 +8,7 @@ from typing import Any
 from bungalo.app_manager import AppManager
 from bungalo.backups.remote import RCloneSync, validate_endpoints
 from bungalo.config.config import BungaloConfig, SyncPair
-from bungalo.config.paths import B2Path, FileLocation, FilePath, NASPath
+from bungalo.config.paths import B2Path, FileLocation, FilePath, NASPath, SFTPPath
 from bungalo.constants import DEFAULT_RCLONE_CONFIG_FILE
 from bungalo.logger import CONSOLE, LOGGER
 from bungalo.slack import SlackClient
@@ -22,9 +22,7 @@ MAX_EXPECTED_AGE = timedelta(days=2)
 
 def _resolve_rclone_path(location: FileLocation) -> str | None:
     match location:
-        case NASPath():
-            return f"{location.endpoint_nickname}:{location.full_path}"
-        case B2Path():
+        case NASPath() | B2Path() | SFTPPath():
             return f"{location.endpoint_nickname}:{location.full_path}"
         case _:
             return None
@@ -212,7 +210,7 @@ async def _collect_recent_local_files(
     match location:
         case FilePath():
             return _collect_recent_from_local_path(Path(location.full_path), now=now)
-        case NASPath() | B2Path():
+        case NASPath() | B2Path() | SFTPPath():
             remote_path = _resolve_rclone_path(location)
             if remote_path is None:
                 return []

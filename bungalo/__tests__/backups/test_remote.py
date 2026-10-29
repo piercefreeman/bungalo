@@ -11,7 +11,7 @@ from bungalo.backups.remote import (
     SyncPair,
     validate_endpoints,
 )
-from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint
+from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint, SFTPEndpoint
 
 
 # --------------------------------------------------------------------------- #
@@ -38,12 +38,25 @@ def b2_endpoint() -> B2Endpoint:
 
 
 @pytest.fixture
+def sftp_endpoint() -> SFTPEndpoint:
+    return SFTPEndpoint(
+        nickname="server",
+        host="server.example.com",
+        username="backup",
+        port=2222,
+        key_file="/run/backup ssh/private_key",
+        known_hosts_file="/run/backup ssh/known_hosts",
+    )
+
+
+@pytest.fixture
 def endpoints(
-    nas_endpoint: NASEndpoint, b2_endpoint: B2Endpoint
+    nas_endpoint: NASEndpoint, b2_endpoint: B2Endpoint, sftp_endpoint: SFTPEndpoint
 ) -> dict[str, EndpointBase]:
     return {
         nas_endpoint.nickname: nas_endpoint,
         b2_endpoint.nickname: b2_endpoint,
+        sftp_endpoint.nickname: sftp_endpoint,
     }
 
 
@@ -102,6 +115,46 @@ async def test_write_config_creates_expected_format(
     assert b2_config["type"] == "b2"
     assert b2_config["account"] == "akid"
     assert b2_config["key"] == "akey"  # secret is not encrypted
+
+    sftp_config = _get_section_config(lines, "server")
+    assert sftp_config == {
+        "type": "sftp",
+        "host": "server.example.com",
+        "user": "backup",
+        "port": "2222",
+        "key_file": "/run/backup ssh/private_key",
+        "known_hosts_file": "/run/backup ssh/known_hosts",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_b2", [False, True])
+async def test_sftp_sync_uses_only_configured_pairs_in_order(
+    rclone: RCloneSync, patched_run: tuple[MagicMock, MagicMock], include_b2: bool
+) -> None:
+    nas_to_b2 = rclone.pairs[0]
+    rclone.pairs = [
+        SyncPair.model_validate(
+            {
+                "src": "sftp:server:///srv/data",
+                "dst": "nas:mynas1://drive/folder/server",
+            }
+        )
+    ]
+    if include_b2:
+        rclone.pairs.append(nas_to_b2)
+    process = AsyncMock()
+    process.wait.return_value = 0
+    patched_run[1].return_value = process
+
+    assert await rclone.sync_all()
+
+    commands = [call.args for call in patched_run[1].call_args_list]
+    expected_paths = [("server:/srv/data", "mynas1:drive/folder/server")]
+    if include_b2:
+        expected_paths.append(("mynas1:drive/folder", "myb2:bucket/folder"))
+    assert [command[4:6] for command in commands] == expected_paths
+    assert all(command[:2] == ("rclone", "sync") for command in commands)
 
 
 def _get_section_config(lines: list[str], section_name: str) -> dict[str, str]:

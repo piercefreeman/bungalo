@@ -28,9 +28,24 @@ self_ip = "100.64.0.10"
   key_id = ""
   application_key = ""
 
+# Optional remote-server ingestion. Paths are inside the Bungalo container;
+# setup.sh already mounts the host's ~/.bungalo at /root/.bungalo.
+# [[endpoints.sftp]]
+#   nickname = "remote-server"
+#   host = "server.example.com"
+#   username = "backup"
+#   port = 22
+#   key_file = "/root/.bungalo/ssh/remote-server"
+#   known_hosts_file = "/root/.bungalo/ssh/known_hosts"
+#
+# Put this pair before NAS -> B2 pairs so ingestion finishes first.
+# [[backups.sync]]
+#   src = "sftp:remote-server:///srv/data"
+#   dst = "nas:unifi-nas://Common_Drive/remote-server"
+
 [[backups.sync]]
   src = "nas:unifi-nas://Common_Drive"
-  dst = "b2-eu:bungalo-nas-eu://common_drive"
+  dst = "b2:b2-us://bungalo-nas-us/common_drive"
 
 [iphoto]
   username = "your_username"

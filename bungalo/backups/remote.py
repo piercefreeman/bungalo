@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field, IPvAnyAddress, ValidationError, model_val
 
 from bungalo.app_manager import AppManager
 from bungalo.config.config import BungaloConfig, SyncPair
-from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint
-from bungalo.config.paths import B2Path, FileLocation, FilePath, NASPath
+from bungalo.config.endpoints import B2Endpoint, EndpointBase, NASEndpoint, SFTPEndpoint
+from bungalo.config.paths import B2Path, FileLocation, FilePath, NASPath, SFTPPath
 from bungalo.constants import DEFAULT_RCLONE_CONFIG_FILE
 from bungalo.logger import CONSOLE, LOGGER
 from bungalo.slack import SlackClient, SlackMessage
@@ -59,6 +59,15 @@ class B2Remote(RemoteBase):
     type: str = "b2"
     account: str
     key: str
+
+
+class SFTPRemote(RemoteBase):
+    type: str = "sftp"
+    host: str
+    user: str
+    port: int
+    key_file: str
+    known_hosts_file: str
 
 
 class EncryptedRemote(RemoteBase):
@@ -138,6 +147,15 @@ class RCloneSync:
                         account=endpoint.key_id,
                         key=endpoint.application_key.get_secret_value(),
                     )
+                case SFTPEndpoint():
+                    remote = SFTPRemote(
+                        name=nickname,
+                        host=endpoint.host,
+                        user=endpoint.username,
+                        port=endpoint.port,
+                        key_file=endpoint.key_file,
+                        known_hosts_file=endpoint.known_hosts_file,
+                    )
                 case EndpointBase():
                     raise ValueError(
                         f"Unsupported base endpoint type: {type(endpoint)}"
@@ -207,10 +225,7 @@ class RCloneSync:
         # We previously used this for SMB mounts via mount_smb, but now we just configure
         # directly in rclone.
         match location:
-            case NASPath():
-                assert endpoint
-                yield f"{location.endpoint_nickname}:{location.full_path}"
-            case B2Path():
+            case NASPath() | B2Path() | SFTPPath():
                 assert endpoint
                 yield f"{location.endpoint_nickname}:{location.full_path}"
             case FilePath():

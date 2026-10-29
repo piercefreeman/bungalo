@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings
 
-from bungalo.config.paths import B2Path, FileLocation, NASPath
+from bungalo.config.paths import B2Path, FileLocation, NASPath, SFTPPath
 
 
 class EndpointBase(BaseSettings, ABC):
@@ -45,3 +45,28 @@ class B2Endpoint(EndpointBase):
 
     def validate_path(self, path: FileLocation) -> bool:
         return isinstance(path, B2Path) and path.endpoint_nickname == self.nickname
+
+
+class SFTPEndpoint(EndpointBase):
+    host: str
+    username: str
+    port: int = Field(default=22, ge=1, le=65535)
+    key_file: str
+    known_hosts_file: str
+
+    @field_validator("host", "username", "key_file", "known_hosts_file")
+    @classmethod
+    def validate_connection_value(cls, value: str) -> str:
+        if not value.strip() or "\n" in value or "\r" in value:
+            raise ValueError("SFTP connection values must be nonempty single lines")
+        return value
+
+    @field_validator("known_hosts_file")
+    @classmethod
+    def require_host_verification(cls, value: str) -> str:
+        if value.strip().lower() == "none":
+            raise ValueError("SFTP requires a known_hosts file for host verification")
+        return value
+
+    def validate_path(self, path: FileLocation) -> bool:
+        return isinstance(path, SFTPPath) and path.endpoint_nickname == self.nickname
