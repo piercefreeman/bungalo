@@ -9,7 +9,7 @@ import json
 import os
 import re
 import shlex
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -35,6 +35,8 @@ FRAME_TIMEOUT_SECONDS = 120
 # Studio's upload script sends this many parts at once.
 PARALLEL_PARTS = 4
 STUDIO_ATTEMPTS = 11
+# How often to read a running transcode's progress file.
+PROGRESS_SECONDS = 15.0
 RETRY_DELAY_SECONDS = 1.0
 MAX_RETRY_DELAY_SECONDS = 60.0
 # Answers that say to try again. A 429 isn't one: Studio sends it when too many
@@ -148,6 +150,19 @@ class StudioUpload(BaseModel):
     missing: list[int]
 
 
+@dataclass(frozen=True)
+class TranscodeProgress:
+    encoded_seconds: float
+    duration: float | None
+    speed: float | None
+    """Seconds of video encoded per second of real time."""
+
+
+TranscodeReporter = Callable[[TranscodeProgress], Awaitable[None]]
+UploadReporter = Callable[[int, int], Awaitable[None]]
+"""Called with the bytes Studio has so far and the file's total."""
+
+
 class UploadFailed(RuntimeError):
     def __init__(self, reason: str, *, link_closed: bool = False):
         super().__init__(reason)
@@ -256,24 +271,32 @@ class Box:
             raise _refused(status, body, link, link_closed=status == 404)
         return _parse_upload(body)
 
-    async def send_upload(self, path: str, link: str, upload: StudioUpload) -> None:
+    async def send_upload(
+        self,
+        path: str,
+        link: str,
+        upload: StudioUpload,
+        on_progress: UploadReporter | None = None,
+    ) -> None:
         """
         Send what an open upload is missing, then assemble it on Studio. A file
         that changes along the way is discarded rather than assembled from a
         mix of both versions.
         """
         version = await self._file_version(path)
-        await self._send_parts(path, link, upload)
+        await self._send_parts(path, link, upload, on_progress)
         if await self._file_version(path) != version:
             await self._cancel(link, upload)
             raise UploadFailed("The file changed while it was uploading")
         await self._complete(link, upload)
 
-    async def upload(self, path: str, link: str) -> None:
+    async def upload(
+        self, path: str, link: str, on_progress: UploadReporter | None = None
+    ) -> None:
         """Send a file that won't exist to resume, discarding it on Studio if it fails."""
         upload = await self.open_upload(path, link)
         try:
-            await self._send_parts(path, link, upload)
+            await self._send_parts(path, link, upload, on_progress)
         except UploadFailed:
             await self._cancel(link, upload)
             raise
@@ -287,6 +310,7 @@ class Box:
         template: str,
         work_dir: str,
         gate: AsyncContextManager[None],
+        on_progress: TranscodeReporter | None = None,
     ) -> AsyncIterator[str]:
         """
         Run a transcode template on the box, yielding the path of its output.
@@ -297,7 +321,7 @@ class Box:
         try:
             output = f"{work}/{output_name}"
             async with gate:
-                await self._run_template(source, output, template)
+                await self._run_template(source, output, template, on_progress)
             yield output
         finally:
             await self._remove_work_dir(work)
@@ -341,13 +365,32 @@ class Box:
             raise UploadFailed("Couldn't read the file's details on the box")
         return int(fields[0]), int(fields[1])
 
-    async def _send_parts(self, path: str, link: str, upload: StudioUpload) -> None:
+    async def _send_parts(
+        self,
+        path: str,
+        link: str,
+        upload: StudioUpload,
+        on_progress: UploadReporter | None = None,
+    ) -> None:
         remaining = iter(upload.missing)
 
+        def length(number: int) -> int:
+            return min(
+                upload.part_bytes, upload.size_bytes - (number - 1) * upload.part_bytes
+            )
+
+        sent = upload.size_bytes - sum(length(number) for number in upload.missing)
+        if on_progress:
+            await on_progress(sent, upload.size_bytes)
+
         async def send_remaining() -> None:
+            nonlocal sent
             # A shared iterator hands each part to exactly one sender.
             for number in remaining:
                 await self._send_part(path, link, upload, number)
+                sent += length(number)
+                if on_progress:
+                    await on_progress(sent, upload.size_bytes)
 
         results = await asyncio.gather(
             *(send_remaining() for _ in range(PARALLEL_PARTS)),
@@ -454,15 +497,33 @@ class Box:
             )
         return _decode(result.stdout).strip()
 
-    async def _run_template(self, source: str, output: str, template: str) -> None:
-        # ffmpeg reads stdin unless told not to, so give it nothing to wait on.
-        result = await self.connection.run(
-            f"{_PATH_SETUP}export INPUT={shlex.quote(source)} "
-            f"OUTPUT={shlex.quote(output)}; "
-            f"/bin/sh -e -c {shlex.quote(template)} </dev/null",
-            encoding=None,
-            check=False,
+    async def _run_template(
+        self,
+        source: str,
+        output: str,
+        template: str,
+        on_progress: TranscodeReporter | None = None,
+    ) -> None:
+        progress = f"{PurePosixPath(output).parent}/.progress"
+        watching = (
+            asyncio.create_task(self._watch_transcode(source, progress, on_progress))
+            if on_progress
+            else None
         )
+        try:
+            # ffmpeg reads stdin unless told not to, so give it nothing to wait on.
+            result = await self.connection.run(
+                f"{_PATH_SETUP}export INPUT={shlex.quote(source)} "
+                f"OUTPUT={shlex.quote(output)} "
+                f"PROGRESS={shlex.quote(progress)}; "
+                f"/bin/sh -e -c {shlex.quote(template)} </dev/null",
+                encoding=None,
+                check=False,
+            )
+        finally:
+            if watching:
+                watching.cancel()
+                await asyncio.gather(watching, return_exceptions=True)
         if result.exit_status != 0:
             raise UploadFailed(f"Transcode failed: {_transcode_error(result.stderr)}")
         check = await self.connection.run(
@@ -470,6 +531,28 @@ class Box:
         )
         if check.exit_status != 0:
             raise UploadFailed("Transcode finished without writing $OUTPUT")
+
+    async def _watch_transcode(
+        self, source: str, path: str, report: TranscodeReporter
+    ) -> None:
+        """Pass on what ffmpeg writes to the progress file, until cancelled."""
+        duration = await self._duration(source)
+        while True:
+            await asyncio.sleep(PROGRESS_SECONDS)
+            # Only a progress line is lost if this fails, so never stop the encode.
+            try:
+                result = await self.connection.run(
+                    f"tail -n 30 {shlex.quote(path)}", encoding=None, check=False
+                )
+                progress = (
+                    parse_transcode_progress(_decode(result.stdout), duration)
+                    if result.exit_status == 0
+                    else None
+                )
+                if progress:
+                    await report(progress)
+            except (asyncssh.Error, OSError, ValueError) as error:
+                LOGGER.warning("Couldn't read transcode progress: %s", error)
 
     async def _remove_work_dir(self, work: str) -> None:
         try:
@@ -550,6 +633,29 @@ class Box:
         if result.exit_status != 0 or not result.stdout:
             return None
         return result.stdout
+
+
+def parse_transcode_progress(
+    text: str, duration: float | None
+) -> TranscodeProgress | None:
+    """The newest reading in ffmpeg's `-progress` output, or None before its first."""
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        # A value is "N/A" until ffmpeg has one, so keep the last real reading.
+        if separator and value.strip() != "N/A":
+            values[key.strip()] = value.strip()
+    try:
+        encoded = int(values["out_time_us"]) / 1_000_000
+    except (KeyError, ValueError):
+        return None
+    try:
+        speed = float(values.get("speed", "").removesuffix("x"))
+    except ValueError:
+        speed = None
+    return TranscodeProgress(
+        encoded_seconds=encoded, duration=duration, speed=speed or None
+    )
 
 
 def read_transcode_template(path: str) -> str:

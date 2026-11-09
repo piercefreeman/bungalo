@@ -14,11 +14,13 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from bungalo.config.config import MediaIngestConfig, MediaIngestTranscodeConfig
+from bungalo.media_ingest import service
 from bungalo.media_ingest.box import (
     Box,
     BoxCommandError,
     ScanResult,
     StudioUpload,
+    TranscodeProgress,
     UploadFailed,
     VideoFile,
     Volume,
@@ -53,6 +55,7 @@ class FakeBox:
         self.deleted: list[str] = []
         self.delete_errors: dict[str, BoxCommandError] = {}
         self.hold: dict[str, asyncio.Event] = {}
+        self.transcode_progress = TranscodeProgress(100.0, 200.0, 1.6)
         self.reading = 0
         self.most_reading = 0
 
@@ -71,15 +74,23 @@ class FakeBox:
         return 10.0, [_jpeg()] * 5
 
     @asynccontextmanager
-    async def transcoded(self, source, output_name, template, work_dir, gate):
+    async def transcoded(
+        self, source, output_name, template, work_dir, gate, on_progress=None
+    ):
         async with gate:
             self.transcodes.append((source, output_name, template, work_dir))
             if self.transcode_error:
                 raise self.transcode_error
             await self._read(source)
+            if on_progress:
+                await on_progress(self.transcode_progress)
         yield f"{work_dir}/job/{output_name}"
 
-    async def upload(self, path: str, link: str) -> None:
+    async def upload(self, path: str, link: str, on_progress=None) -> None:
+        if on_progress:
+            await on_progress(0, 1000)
+            await asyncio.sleep(0.001)
+            await on_progress(500, 1000)
         if path in self.upload_errors:
             raise self.upload_errors[path]
         await self._read(path)
@@ -102,8 +113,10 @@ class FakeBox:
             missing=[1],
         )
 
-    async def send_upload(self, path: str, link: str, upload: StudioUpload) -> None:
-        await self.upload(path, link)
+    async def send_upload(
+        self, path: str, link: str, upload: StudioUpload, on_progress=None
+    ) -> None:
+        await self.upload(path, link, on_progress)
 
 
 class FakeSlack:
@@ -1035,7 +1048,7 @@ async def test_failures_are_reported_in_order_and_the_rest_still_upload(
 async def test_losing_the_box_stops_the_reply_and_says_why(tmp_path: Path) -> None:
     box = FakeBox([_volume("a.mov", "b.mov")])
 
-    async def lost(path: str, link: str) -> None:
+    async def lost(path: str, link: str, on_progress=None) -> None:
         raise ConnectionResetError("gone")
 
     ingest, slack = _setup(tmp_path, box)
@@ -1047,6 +1060,79 @@ async def test_losing_the_box_stops_the_reply_and_says_why(tmp_path: Path) -> No
 
     assert "couldn't be reached (ConnectionResetError)" in slack.status_updates[-1]
     assert ingest.state.batches[0].videos[0].uploaded_to == []
+
+
+@pytest.mark.asyncio
+async def test_the_status_shows_how_a_transcode_and_its_upload_are_going(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service, "PROGRESS_SECONDS", 0.0)
+    box = FakeBox([_volume("a.mov")])
+    ingest, slack = _setup(tmp_path, box, _transcode_config(tmp_path))
+    await ingest.scan_once()
+    slack.replies = _ask()
+
+    await ingest.check_comments_once()
+
+    assert (
+        "Transcoding 1 of 1: #1 (1000 B): 50%, 1.6x realtime, about 1:02 left"
+        in slack.status_updates
+    )
+    assert any(
+        text.startswith("Uploading 1 of 1: #1 (1000 B): 50%, ") and "/s, about " in text
+        for text in slack.status_updates
+    )
+    assert slack.status_updates[-1] == "Uploaded 1 of 1 to Studio."
+
+
+@pytest.mark.asyncio
+async def test_a_transcode_of_unknown_length_still_shows_it_is_moving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service, "PROGRESS_SECONDS", 0.0)
+    box = FakeBox([_volume("a.mov")])
+    box.transcode_progress = TranscodeProgress(75.0, None, None)
+    ingest, slack = _setup(tmp_path, box, _transcode_config(tmp_path))
+    await ingest.scan_once()
+    slack.replies = _ask()
+
+    await ingest.check_comments_once()
+
+    assert "Transcoding 1 of 1: #1 (1000 B): 1:15 encoded" in slack.status_updates
+
+
+@pytest.mark.asyncio
+async def test_progress_edits_slack_only_every_so_often(tmp_path: Path) -> None:
+    box = FakeBox([_volume("a.mov")])
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    slack.replies = _ask()
+
+    await ingest.check_comments_once()
+
+    assert not any("%" in text for text in slack.status_updates)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_progress_edit_doesnt_stop_the_upload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service, "PROGRESS_SECONDS", 0.0)
+    box = FakeBox([_volume("a.mov")])
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    slack.replies = _ask()
+    updating = slack.update_status
+
+    async def flaky(status: SlackMessage, text: str) -> None:
+        if "%" in text:
+            raise OSError("Slack went away")
+        await updating(status, text)
+
+    slack.update_status = flaky  # type: ignore[method-assign]
+    await ingest.check_comments_once()
+
+    assert slack.status_updates[-1] == "Uploaded 1 of 1 to Studio."
 
 
 @pytest.mark.asyncio

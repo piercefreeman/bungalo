@@ -132,7 +132,7 @@ To upload, reply in that thread with the numbers and a public upload link from t
 
 > 1 3 5-8 https://studio.example.com/public-upload/KEY
 
-Use `all` instead of numbers to send everything. The link's origin must match `studio_url`, and a comment that selects videos without a valid link gets a reply explaining what's needed. Anyone who can post in the channel can request an upload if they have a valid link. Bungalo adds :eyes: to every comment as soon as it reads it. Comments in one thread run in order, while different threads run side by side, so footage that needs no transcode starts straight away. Each volume is read for one video at a time, and only one transcode runs at a time, though a finished transcode uploads while the next one runs. A thread takes comments for 14 days. It then closes with a note, and any videos not uploaded are offered again in a new post the next time their volume is scanned.
+Use `all` instead of numbers to send everything. The link's origin must match `studio_url`, and a comment that selects videos without a valid link gets a reply explaining what's needed. Anyone who can post in the channel can request an upload if they have a valid link. Bungalo adds :eyes: to every comment as soon as it reads it, and its status message shows each video's percentage, speed and time left. Comments in one thread run in order, while different threads run side by side, so footage that needs no transcode starts straight away. Each volume is read for one video at a time, and only one transcode runs at a time, though a finished transcode uploads while the next one runs. A thread takes comments for 14 days. It then closes with a note, and any videos not uploaded are offered again in a new post the next time their volume is scanned.
 
 After a video uploads, Bungalo asks in the same thread whether to remove it from the volume. Reply exactly `DELETE` after the latest list to permanently remove the videos on it. Each file is checked again on the Mac as it's removed, and left alone if it changed or its disk was swapped. Network shares have no disk ID to check, so Bungalo won't offer to delete from them. Only the video files are removed, so sidecar files stay. For a volume that's transcoded, Studio has the transcoded version, not the original. Anyone who can post in the channel can confirm a delete.
 
@@ -171,7 +171,7 @@ To convert selected videos on the Mac before they upload, add a template:
 
 `volumes` is optional and limits conversion to those names from `media_ingest.volumes`. Without it, every scanned volume is converted. Videos from any other volume upload as recorded, keeping their own filenames and resuming part by part.
 
-The template is a shell script stored on the Bungalo server, so use its container path. It runs on the Mac under `/bin/sh -e` once per selected video, and is re-read for each request, so edits apply without a restart. Quote its two variables so any filename is safe:
+The template is a shell script stored on the Bungalo server, so use its container path. It runs on the Mac under `/bin/sh -e` once per selected video, and is re-read for each request, so edits apply without a restart. Quote its variables so any filename is safe. `-progress` is optional, and is what lets the thread show how far a transcode has got:
 
 ```sh
 ffmpeg -hide_banner -i "$INPUT" \
@@ -181,6 +181,7 @@ ffmpeg -hide_banner -i "$INPUT" \
   -b:v 25M -maxrate 40M -bufsize 60M \
   -c:a aac -b:a 192k \
   -movflags +faststart \
+  -progress "${PROGRESS:-/dev/null}" \
   "$OUTPUT"
 ```
 

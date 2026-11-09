@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import subprocess
@@ -11,13 +12,17 @@ from unittest.mock import patch
 import asyncssh
 import pytest
 
+from bungalo.media_ingest import box as box_module
 from bungalo.media_ingest.box import (
     Box,
     BoxCommandError,
+    StudioUpload,
+    TranscodeProgress,
     UploadFailed,
     VideoFile,
     Volume,
     parse_scan,
+    parse_transcode_progress,
     read_transcode_template,
     sample_offsets,
 )
@@ -497,3 +502,77 @@ async def test_failed_cleanup_is_logged_without_replacing_the_result(
         ):
             pass
     logger.warning.assert_called_once()
+
+
+class AsyncLocalConnection:
+    """A real local shell that leaves the event loop free while a command runs."""
+
+    async def run(self, command: str, **kwargs: Any) -> Any:
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        return SimpleNamespace(
+            exit_status=process.returncode, stdout=stdout, stderr=stderr
+        )
+
+
+def test_progress_is_the_newest_reading_ffmpeg_wrote() -> None:
+    text = (
+        "out_time_us=1000000\nspeed=1.2x\nprogress=continue\n"
+        "out_time_us=N/A\nspeed=N/A\nprogress=continue\n"
+        "out_time_us=9500000\nspeed= 1.6x\nprogress=continue\nframe=2"
+    )
+    assert parse_transcode_progress(text, 19.0) == TranscodeProgress(9.5, 19.0, 1.6)
+
+
+@pytest.mark.parametrize("text", ["", "frame=1\n", "out_time_us=N/A\n"])
+def test_no_progress_before_ffmpeg_has_a_reading(text: str) -> None:
+    assert parse_transcode_progress(text, 19.0) is None
+
+
+@pytest.mark.asyncio
+async def test_a_running_transcode_reports_what_it_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(box_module, "PROGRESS_SECONDS", 0.01)
+    template = (
+        'test -n "$INPUT"\n'
+        "printf 'out_time_us=5000000\\nspeed=2.0x\\nprogress=continue\\n' > \"$PROGRESS\"\n"
+        'sleep 0.3\necho done > "$OUTPUT"\n'
+    )
+    seen: list[TranscodeProgress] = []
+
+    async def report(progress: TranscodeProgress) -> None:
+        seen.append(progress)
+
+    box = Box(AsyncLocalConnection())
+    async with box.transcoded(
+        "/no/such.mov",
+        "a.mp4",
+        template,
+        str(tmp_path),
+        gate=nullcontext(),
+        on_progress=report,
+    ):
+        assert seen
+    assert seen[0].encoded_seconds == 5.0 and seen[0].speed == 2.0
+
+
+@pytest.mark.asyncio
+async def test_upload_reports_each_part_and_counts_what_studio_already_had() -> None:
+    reports: list[tuple[int, int]] = []
+
+    async def report(sent: int, total: int) -> None:
+        reports.append((sent, total))
+
+    box = Box(FakeStudio())
+    upload = StudioUpload(
+        upload_id=UploadSessionID("up1"), size_bytes=70, part_bytes=30, missing=[2, 3]
+    )
+    await box._send_parts("/a.mov", LINK, upload, report)
+
+    assert reports[0] == (30, 70)
+    assert reports[-1] == (70, 70)

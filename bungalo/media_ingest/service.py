@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
+from time import monotonic
 from typing import AsyncContextManager
 
 from bungalo.app_manager import AppManager
@@ -30,7 +31,9 @@ from bungalo.media_ingest.box import (
     Box,
     BoxCommandError,
     ScanResult,
+    TranscodeProgress,
     UploadFailed,
+    UploadReporter,
     VideoFile,
     Volume,
     connect_box,
@@ -67,6 +70,8 @@ TRANSCODES_AT_ONCE = 1
 # Per reply: its videos share one SSH connection, where sshd allows 10 sessions
 # by default and an upload uses 4. Also caps finished outputs waiting on the box.
 TRANSCODED_VIDEOS_AT_ONCE = 2
+# Slack rate-limits edits, and a reply's videos share one status message.
+PROGRESS_SECONDS = 15.0
 ACKNOWLEDGE_EMOJI = "eyes"
 # Slack quietly truncates long messages, which would hide files from a delete list.
 MAX_MESSAGE_CHARS = 8000
@@ -112,6 +117,7 @@ class _UploadJob:
     failures: dict[int, str] = field(default_factory=dict)
     uploaded: int = 0
     link_closed: bool = False
+    shown_at: float = 0.0
     transcoded_videos: asyncio.Semaphore = field(
         default_factory=lambda: asyncio.Semaphore(TRANSCODED_VIDEOS_AT_ONCE)
     )
@@ -562,7 +568,9 @@ class MediaIngest:
             # Saved before any part is sent, so a restart can resume.
             video.upload_ids[job.link_hash] = started.upload_id
             self.store.save(self.state)
-            await job.box.send_upload(source, job.link, started)
+            await job.box.send_upload(
+                source, job.link, started, self._upload_reporter(job, video)
+            )
 
     async def _send_transcoded(
         self, job: _UploadJob, video: BatchVideo, file: VideoFile
@@ -574,9 +582,10 @@ class MediaIngest:
             job.template,
             job.transcode.work_dir,
             gate=self._turn(job, video, "Transcoding", transcoding=True),
+            on_progress=lambda progress: self._show_transcoding(job, video, progress),
         ) as output:
             await self._show(job, video, "Uploading")
-            await job.box.upload(output, job.link)
+            await job.box.upload(output, job.link, self._upload_reporter(job, video))
 
     @asynccontextmanager
     async def _turn(
@@ -599,7 +608,58 @@ class MediaIngest:
     async def _show(self, job: _UploadJob, video: BatchVideo, action: str) -> None:
         """Update this video's line of the reply's one status message."""
         job.lines[video.number] = f"{action} {job.labels[video.number]}"
+        await self._render(job)
+
+    async def _render(self, job: _UploadJob) -> None:
+        job.shown_at = monotonic()
         await self.slack.update_status(job.status, "\n".join(job.lines.values()))
+
+    async def _show_progress(
+        self, job: _UploadJob, video: BatchVideo, action: str, detail: str
+    ) -> None:
+        """Add a reading to this video's line, editing Slack only every so often."""
+        job.lines[video.number] = f"{action} {job.labels[video.number]}: {detail}"
+        if monotonic() - job.shown_at < PROGRESS_SECONDS:
+            return
+        # Progress is a nicety: a failed edit must never stop the transfer.
+        try:
+            await self._render(job)
+        except Exception as error:
+            LOGGER.warning("Couldn't show progress: %s", type(error).__name__)
+
+    async def _show_transcoding(
+        self, job: _UploadJob, video: BatchVideo, progress: TranscodeProgress
+    ) -> None:
+        details: list[str] = []
+        if progress.duration:
+            percent = min(100, int(progress.encoded_seconds * 100 / progress.duration))
+            details.append(f"{percent}%")
+        if progress.speed:
+            details.append(f"{progress.speed:.1f}x realtime")
+        if progress.duration and progress.speed:
+            left = max(0.0, progress.duration - progress.encoded_seconds)
+            details.append(f"about {format_duration(left / progress.speed)} left")
+        details = details or [f"{format_duration(progress.encoded_seconds)} encoded"]
+        await self._show_progress(job, video, "Transcoding", ", ".join(details))
+
+    def _upload_reporter(self, job: _UploadJob, video: BatchVideo) -> UploadReporter:
+        """Report one upload, with its rate counted from where this attempt began."""
+        started = monotonic()
+        first_sent: int | None = None
+
+        async def report(sent: int, total: int) -> None:
+            nonlocal first_sent
+            if first_sent is None:
+                first_sent = sent
+            details = [f"{sent * 100 // total}%"]
+            elapsed = monotonic() - started
+            rate = (sent - first_sent) / elapsed if elapsed > 0 else 0
+            if rate > 0:
+                details.append(f"{format_size(rate)}/s")
+                details.append(f"about {format_duration((total - sent) / rate)} left")
+            await self._show_progress(job, video, "Uploading", ", ".join(details))
+
+        return report
 
 
 def _offerable(batch: Batch) -> list[BatchVideo]:
