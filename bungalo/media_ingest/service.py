@@ -235,8 +235,8 @@ class MediaIngest:
             LOGGER.error("Upload request failed: %s", type(error).__name__)
             summary = (
                 f"Upload stopped because the box couldn't be reached "
-                f"({type(error).__name__}). Comment again to retry; videos "
-                "confirmed by Studio won't be sent again."
+                f"({type(error).__name__}). Comment again to pick up where it "
+                "stopped; videos confirmed by Studio won't be sent again."
             )
         await self.slack.update_status(status, summary)
 
@@ -294,13 +294,23 @@ class MediaIngest:
                             )
                             await box.upload(output, request.link)
                     else:
-                        await box.upload(volume.path_of(file), request.link)
+                        source = volume.path_of(file)
+                        started = await box.open_upload(
+                            source,
+                            request.link,
+                            resume_id=video.upload_ids.get(link_hash),
+                        )
+                        # Saved before any part is sent, so a restart can resume.
+                        video.upload_ids[link_hash] = started.upload_id
+                        self.store.save(self.state)
+                        await box.send_upload(source, request.link, started)
                 except UploadFailed as error:
                     failures.append(f"#{video.number}: {error.reason}")
                     if error.link_closed:
                         break
                     continue
                 video.uploaded_to.append(link_hash)
+                video.upload_ids.pop(link_hash, None)
                 self.store.save(self.state)
                 uploaded += 1
 

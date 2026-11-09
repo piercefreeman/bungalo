@@ -13,12 +13,13 @@ from bungalo.config.config import MediaIngestConfig, MediaIngestTranscodeConfig
 from bungalo.media_ingest.box import (
     Box,
     ScanResult,
+    StudioUpload,
     UploadFailed,
     VideoFile,
     Volume,
 )
 from bungalo.media_ingest.service import MediaIngest
-from bungalo.media_ingest.state import StateStore
+from bungalo.media_ingest.state import StateStore, UploadSessionID, hash_link
 from bungalo.slack import SlackClient, SlackMessage
 
 STUDIO = "https://studio.example.com"
@@ -43,6 +44,7 @@ class FakeBox:
         self.upload_errors: dict[str, UploadFailed] = {}
         self.transcodes: list[tuple[str, str, str, str]] = []
         self.transcode_error: UploadFailed | None = None
+        self.resumed: list[UploadSessionID | None] = []
 
     async def scan(self, ignored: list[str]) -> ScanResult:
         return ScanResult(self.volumes)
@@ -61,6 +63,20 @@ class FakeBox:
         if path in self.upload_errors:
             raise self.upload_errors[path]
         self.uploads.append((path, link))
+
+    async def open_upload(
+        self, path: str, link: str, resume_id: UploadSessionID | None = None
+    ) -> StudioUpload:
+        self.resumed.append(resume_id)
+        return StudioUpload(
+            upload_id=resume_id or UploadSessionID("fresh-id"),
+            size_bytes=1000,
+            part_bytes=32,
+            missing=[1],
+        )
+
+    async def send_upload(self, path: str, link: str, upload: StudioUpload) -> None:
+        await self.upload(path, link)
 
 
 class FakeSlack:
@@ -349,3 +365,40 @@ async def test_comment_without_link_gets_guidance_and_no_upload(
     await ingest.check_comments_once()
     assert box.uploads == []
     assert "Studio public upload link" in slack.posts[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_upload_resumes_across_a_restart(tmp_path: Path) -> None:
+    box = FakeBox([_volume("a.mp4")])
+    box.upload_errors["/Volumes/CARD/a.mp4"] = UploadFailed("Lost it")
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+    video = ingest.state.batches[0].videos[0]
+    assert video.upload_ids == {hash_link(LINK): "fresh-id"}
+
+    box.upload_errors.clear()
+    restarted, slack = _setup(tmp_path, box)
+    slack.replies = [{"ts": "201.0", "user": "U", "text": f"1 {LINK}"}]
+    await restarted.check_comments_once()
+    assert box.resumed == [None, "fresh-id"]
+    video = restarted.state.batches[0].videos[0]
+    assert video.upload_ids == {} and video.uploaded_to == [hash_link(LINK)]
+
+
+@pytest.mark.asyncio
+async def test_a_transcoded_upload_is_never_resumed(tmp_path: Path) -> None:
+    template = tmp_path / "t.sh"
+    template.write_text(TEMPLATE)
+    transcode = MediaIngestTranscodeConfig(
+        template=str(template), output_suffix="_HQ.mp4", work_dir="/w"
+    )
+    box = FakeBox([_volume("a.mp4")])
+    ingest, slack = _setup(tmp_path, box, transcode)
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+    assert box.uploads == [("/w/job/a_HQ.mp4", LINK)]
+    assert box.resumed == []
+    assert ingest.state.batches[0].videos[0].upload_ids == {}

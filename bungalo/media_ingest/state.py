@@ -7,8 +7,11 @@ import hashlib
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import NewType
 
 from pydantic import BaseModel, Field
+
+UploadSessionID = NewType("UploadSessionID", str)
 
 
 class BatchVideo(BaseModel):
@@ -18,6 +21,9 @@ class BatchVideo(BaseModel):
     fingerprint: str
     uploaded_to: list[str] = Field(default_factory=list)
     """Hashes of the Studio links this video has already reached."""
+
+    upload_ids: dict[str, UploadSessionID] = Field(default_factory=dict)
+    """Studio's id for an unfinished upload of this video, by link hash."""
 
 
 class Batch(BaseModel):

@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import time
@@ -17,6 +18,7 @@ from bungalo.media_ingest.box import (
     read_transcode_template,
     sample_offsets,
 )
+from bungalo.media_ingest.state import UploadSessionID
 
 STUDIO = "https://studio.example.com"
 
@@ -59,43 +61,235 @@ class FakeConnection:
         return self.result
 
 
-@pytest.mark.asyncio
-async def test_upload_keeps_the_link_off_the_command_line() -> None:
-    connection = FakeConnection(FakeResult(stdout=b'{"files": []}\n200'))
-    await Box(connection).upload("/Volumes/CARD/my clip.mov", LINK)
-    command, kwargs = connection.calls[0]
-    assert "abc_DEF-123" not in command
-    assert kwargs["input"] == f'url = "{LINK}/my%20clip.mov"\n'.encode()
+TOKEN = "abc_DEF-123"
+PATH = "/Volumes/CARD/my clip.mov"
+
+
+def _opened(missing: list[int], upload_id: str = "up1", size: int = 70) -> FakeResult:
+    answer = {
+        "upload_id": upload_id,
+        "size_bytes": size,
+        "part_bytes": 32,
+        "parts": 3,
+        "missing": missing,
+    }
+    return FakeResult(stdout=json.dumps(answer).encode() + b"\n200")
+
+
+class FakeStudio:
+    """Answers the box's commands as Studio would; `answers` overrides by request."""
+
+    def __init__(self, *answers: tuple[str, FakeResult]):
+        self.answers = list(answers)
+        self.requests: list[str] = []
+        self.commands: list[str] = []
+        self.size = 70
+        self.mtimes: list[int] = []
+
+    async def run(self, command: str, **kwargs: Any) -> FakeResult:
+        self.commands.append(command)
+        if command.startswith("stat "):
+            mtime = self.mtimes.pop(0) if self.mtimes else 5
+            return FakeResult(stdout=f"{self.size} {mtime}\n".encode())
+        url = kwargs["input"].decode().removeprefix('url = "').rstrip('"\n')
+        suffix = url.removeprefix(LINK)
+        method = (
+            "PUT"
+            if "--upload-file" in command
+            else command.split("--request ")[1].split()[0]
+        )
+        request = f"{method} {suffix}"
+        self.requests.append(request)
+        for index, (expected, answer) in enumerate(self.answers):
+            if expected == request:
+                del self.answers[index]
+                return answer
+        if method == "PUT":
+            return FakeResult(stdout=b"\n204")
+        if method == "POST" and "?filename=" in suffix:
+            return _opened([1, 2, 3])
+        if method == "DELETE":
+            return FakeResult(stdout=b"\n204")
+        return FakeResult(stdout=b'{"media_file_id": "m", "name": "a"}\n200')
+
+    @property
+    def parts(self) -> list[str]:
+        return sorted(r for r in self.requests if r.startswith("PUT"))
+
+
+@pytest.fixture(autouse=True)
+def no_retry_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bungalo.media_ingest.box.RETRY_DELAY_SECONDS", 0)
+
+
+ALL_PARTS = [f"PUT /uploads/up1/parts/{number}" for number in (1, 2, 3)]
+COMPLETE = "POST /uploads/up1/complete"
 
 
 @pytest.mark.asyncio
-async def test_upload_surfaces_studio_refusal_and_closed_links() -> None:
-    refused = FakeConnection(FakeResult(stdout=b'{"detail": "Too big"}\n413'))
-    with pytest.raises(UploadFailed, match="Too big") as too_big:
-        await Box(refused).upload("/Volumes/CARD/a.mov", LINK)
-    assert not too_big.value.link_closed
-
-    closed = FakeConnection(FakeResult(stdout=b'{"detail": "Closed"}\n404'))
-    with pytest.raises(UploadFailed) as gone:
-        await Box(closed).upload("/Volumes/CARD/a.mov", LINK)
-    assert gone.value.link_closed
+async def test_upload_sends_every_part_then_completes() -> None:
+    studio = FakeStudio()
+    await Box(studio).upload(PATH, LINK)
+    assert studio.requests[0] == "POST /uploads?filename=my%20clip.mov&size_bytes=70"
+    assert studio.parts == ALL_PARTS
+    assert studio.requests[-1] == COMPLETE
+    assert not any(TOKEN in command for command in studio.commands)
+    part_three = next(c for c in studio.commands if "skip=2" in c)
+    assert "bs=32" in part_three and "my clip.mov" in part_three
 
 
 @pytest.mark.asyncio
-async def test_upload_error_never_repeats_the_link() -> None:
-    connection = FakeConnection(FakeResult(exit_status=7, stderr=LINK.encode()))
+async def test_resuming_sends_only_what_studio_is_missing() -> None:
+    studio = FakeStudio(("GET /uploads/up1", _opened([2])))
+    box = Box(studio)
+    upload = await box.open_upload(PATH, LINK, resume_id=UploadSessionID("up1"))
+    await box.send_upload(PATH, LINK, upload)
+    assert studio.requests == [
+        "GET /uploads/up1",
+        "PUT /uploads/up1/parts/2",
+        COMPLETE,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resuming_a_finished_upload_only_completes_it() -> None:
+    studio = FakeStudio(("GET /uploads/up1", _opened([])))
+    box = Box(studio)
+    await box.send_upload(
+        PATH, LINK, await box.open_upload(PATH, LINK, UploadSessionID("up1"))
+    )
+    assert studio.requests == ["GET /uploads/up1", COMPLETE]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        FakeResult(stdout=b'{"detail": "expired"}\n410'),
+        FakeResult(stdout=b'{"detail": "unknown"}\n404'),
+        _opened([1], size=999),
+    ],
+    ids=["expired", "unknown", "different-size"],
+)
+async def test_an_upload_that_cant_be_resumed_starts_again(answer: FakeResult) -> None:
+    studio = FakeStudio(("GET /uploads/old", answer))
+    upload = await Box(studio).open_upload(PATH, LINK, resume_id=UploadSessionID("old"))
+    assert upload.upload_id == "up1" and upload.missing == [1, 2, 3]
+    assert studio.requests[-1].startswith("POST /uploads?filename=")
+
+
+@pytest.mark.asyncio
+async def test_lost_connections_and_server_errors_are_retried() -> None:
+    studio = FakeStudio(
+        ("PUT /uploads/up1/parts/2", FakeResult(exit_status=7, stdout=b"\n000")),
+        ("PUT /uploads/up1/parts/2", FakeResult(stdout=b"Bad gateway\n502")),
+        (COMPLETE, FakeResult(exit_status=52, stdout=b"\n000")),
+    )
+    await Box(studio).upload(PATH, LINK)
+    assert studio.requests.count("PUT /uploads/up1/parts/2") == 3
+    assert studio.requests.count(COMPLETE) == 2
+
+
+@pytest.mark.asyncio
+async def test_upload_surfaces_studio_refusal_without_retrying() -> None:
+    too_big = ("POST /uploads?filename=my%20clip.mov&size_bytes=70",)
+    studio = FakeStudio((*too_big, FakeResult(stdout=b'{"detail": "Too big"}\n413')))
+    with pytest.raises(UploadFailed, match="Too big") as failed:
+        await Box(studio).upload(PATH, LINK)
+    assert not failed.value.link_closed
+    assert len(studio.requests) == 1
+
+
+OPENING = "POST /uploads?filename=my%20clip.mov&size_bytes=70"
+
+
+@pytest.mark.asyncio
+async def test_a_lost_answer_to_opening_is_not_repeated() -> None:
+    # Studio may have opened it; another try would leave a second one open.
+    studio = FakeStudio((OPENING, FakeResult(exit_status=52, stdout=b"\n000")))
+    with pytest.raises(UploadFailed):
+        await Box(studio).upload(PATH, LINK)
+    assert studio.requests == [OPENING]
+
+
+@pytest.mark.asyncio
+async def test_opening_is_retried_when_it_was_never_sent() -> None:
+    studio = FakeStudio((OPENING, FakeResult(exit_status=7, stdout=b"\n000")))
+    await Box(studio).upload(PATH, LINK)
+    assert studio.requests.count(OPENING) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_missing_upload_does_not_close_the_link() -> None:
+    gone = FakeResult(stdout=b'{"detail": "No upload"}\n404')
+    studio = FakeStudio(("PUT /uploads/up1/parts/1", gone))
+    box = Box(studio)
+    with pytest.raises(UploadFailed, match="No upload") as failed:
+        await box.send_upload(PATH, LINK, await box.open_upload(PATH, LINK))
+    assert not failed.value.link_closed
+
+
+@pytest.mark.asyncio
+async def test_a_file_that_changes_during_upload_is_not_assembled() -> None:
+    studio = FakeStudio()
+    studio.mtimes = [5, 5, 9]
+    box = Box(studio)
+    with pytest.raises(UploadFailed, match="changed"):
+        await box.send_upload(PATH, LINK, await box.open_upload(PATH, LINK))
+    assert COMPLETE not in studio.requests
+    assert "DELETE /uploads/up1" in studio.requests
+
+
+@pytest.mark.asyncio
+async def test_a_closed_link_is_reported_as_closed() -> None:
+    opening = "POST /uploads?filename=my%20clip.mov&size_bytes=70"
+    studio = FakeStudio((opening, FakeResult(stdout=b'{"detail": "Closed"}\n404')))
     with pytest.raises(UploadFailed) as failed:
-        await Box(connection).upload("/Volumes/CARD/a.mov", LINK)
-    assert "abc_DEF-123" not in failed.value.reason
+        await Box(studio).upload(PATH, LINK)
+    assert failed.value.link_closed
 
 
 @pytest.mark.asyncio
-async def test_studio_error_details_never_repeat_the_token() -> None:
-    body = b'{"detail": "Rejected /public-upload/abc_DEF-123/a.mov"}\n422'
-    connection = FakeConnection(FakeResult(stdout=body))
+async def test_a_file_that_cant_be_read_is_not_retried() -> None:
+    studio = FakeStudio(("PUT /uploads/up1/parts/1", FakeResult(exit_status=125)))
+    with pytest.raises(UploadFailed, match="Couldn't read"):
+        await Box(studio).upload(PATH, LINK)
+    assert studio.requests.count("PUT /uploads/up1/parts/1") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_upload_is_discarded_when_a_part_fails() -> None:
+    refused = FakeResult(stdout=b'{"detail": "Wrong size"}\n422')
+    studio = FakeStudio(("PUT /uploads/up1/parts/1", refused))
+    with pytest.raises(UploadFailed, match="Wrong size"):
+        await Box(studio).upload(PATH, LINK)
+    assert "DELETE /uploads/up1" in studio.requests
+    assert COMPLETE not in studio.requests
+
+
+@pytest.mark.asyncio
+async def test_a_failed_completion_is_not_discarded() -> None:
+    # Completion may have worked with only its answer lost.
+    studio = FakeStudio(*[(COMPLETE, FakeResult(exit_status=52))] * 11)
+    with pytest.raises(UploadFailed):
+        await Box(studio).upload(PATH, LINK)
+    assert "DELETE /uploads/up1" not in studio.requests
+
+
+@pytest.mark.asyncio
+async def test_errors_never_repeat_the_token() -> None:
+    lost = FakeResult(exit_status=7, stderr=f"{LINK}/uploads".encode())
+    opening = "POST /uploads?filename=my%20clip.mov&size_bytes=70"
+    studio = FakeStudio(*[(opening, lost)] * 11)
     with pytest.raises(UploadFailed) as failed:
-        await Box(connection).upload("/Volumes/CARD/a.mov", LINK)
-    assert "abc_DEF-123" not in failed.value.reason
+        await Box(studio).upload(PATH, LINK)
+    assert TOKEN not in failed.value.reason
+
+    detail = json.dumps({"detail": f"Rejected {LINK}/a.mov"}).encode()
+    studio = FakeStudio((opening, FakeResult(stdout=detail + b"\n422")))
+    with pytest.raises(UploadFailed) as failed:
+        await Box(studio).upload(PATH, f"{LINK}/")
+    assert TOKEN not in failed.value.reason
 
 
 def test_parse_scan_keeps_carriage_returns_inside_file_names() -> None:

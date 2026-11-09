@@ -4,6 +4,7 @@ SSH so video never travels through Bungalo: frames come back as small JPEGs,
 and uploads go straight from the box to Studio with curl.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -12,13 +13,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 import asyncssh
+from pydantic import BaseModel, ValidationError
 
 from bungalo.config.endpoints import SFTPEndpoint
 from bungalo.logger import LOGGER
+from bungalo.media_ingest.state import UploadSessionID
 
 # Studio's video formats (editor/core/media.py); it refuses anything else.
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".mxf")
@@ -29,10 +32,39 @@ FRAME_HEIGHT = 180
 SCAN_TIMEOUT_SECONDS = 600
 FRAME_TIMEOUT_SECONDS = 120
 
+# Studio's upload script sends this many parts at once.
+PARALLEL_PARTS = 4
+STUDIO_ATTEMPTS = 11
+RETRY_DELAY_SECONDS = 1.0
+MAX_RETRY_DELAY_SECONDS = 60.0
+# Answers that say to try again. A 429 isn't one: Studio sends it when too many
+# uploads are open, and the person who asked should hear that.
+_RETRYABLE_STATUSES = {408, 500, 502, 503, 504}
+# curl's exit statuses for failing to resolve or connect: nothing was sent.
+_NEVER_SENT = {6, 7}
+# Higher than any exit status curl uses.
+_READ_FAILED = 125
+
+StudioMethod = Literal["GET", "POST", "DELETE"]
+
 # Non-interactive SSH sessions on macOS don't include Homebrew in PATH.
 _PATH_SETUP = "export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; "
 
 _PROGRESS_LINE = re.compile(r"^(\w+=\s*\S*|frame=.*|size=.*)$")
+
+# The link is the credential, so each URL goes to curl on stdin to stay out of `ps`.
+_CURL = [
+    "curl",
+    "--config",
+    "-",
+    "--silent",
+    "--show-error",
+    "--globoff",
+    "--connect-timeout",
+    "30",
+    "--write-out",
+    "\n%{http_code}",
+]
 
 _NAME_TESTS = " -o ".join(f"-iname '*{ext}'" for ext in VIDEO_EXTENSIONS)
 _SCAN_SCRIPT = rf"""
@@ -105,6 +137,15 @@ class BoxCommandError(RuntimeError):
     """A command on the box failed in a way that makes its result unusable."""
 
 
+class StudioUpload(BaseModel):
+    """A file open on Studio, and what it still needs."""
+
+    upload_id: UploadSessionID
+    size_bytes: int
+    part_bytes: int
+    missing: list[int]
+
+
 class UploadFailed(RuntimeError):
     def __init__(self, reason: str, *, link_closed: bool = False):
         super().__init__(reason)
@@ -142,10 +183,9 @@ def sample_offsets(duration: float, count: int = FRAMES_PER_VIDEO) -> list[float
     return [duration * (index + 0.5) / count for index in range(count)]
 
 
-def _text(value: Any) -> str:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", "replace")
-    return value or ""
+def _decode(output: bytes) -> str:
+    """Command output, which can hold file names in any encoding."""
+    return output.decode("utf-8", "replace")
 
 
 class Box:
@@ -161,13 +201,13 @@ class Box:
             check=False,
             timeout=SCAN_TIMEOUT_SECONDS,
         )
-        stderr = _text(result.stderr).strip()
+        stderr = _decode(result.stderr).strip()
         if result.exit_status != 0:
             raise BoxCommandError(
                 f"Volume scan exited with {result.exit_status}: {stderr}"
             )
         return ScanResult(
-            volumes=parse_scan(_text(result.stdout)),
+            volumes=parse_scan(_decode(result.stdout)),
             warnings=stderr.splitlines()[:3],
         )
 
@@ -180,47 +220,57 @@ class Box:
             await self._frame(path, offset) for offset in sample_offsets(duration)
         ]
 
-    async def upload(self, path: str, link: str) -> None:
+    async def open_upload(
+        self, path: str, link: str, resume_id: UploadSessionID | None = None
+    ) -> StudioUpload:
         """
-        Send a file from the box to a Studio upload link. The link is the
-        credential, so curl reads it from stdin to keep it out of `ps`.
+        Start a file on Studio, or pick `resume_id` back up if Studio still has
+        it for a file this size. Only resume an upload of these exact bytes:
+        Studio checks the size of each part, not its contents.
         """
-        target = f"{link.rstrip('/')}/{quote(PurePosixPath(path).name, safe='')}"
-        command = [
-            "curl",
-            "--config",
-            "-",
-            "--silent",
-            "--show-error",
-            "--globoff",
-            "--connect-timeout",
-            "30",
-            # Give up on a stalled transfer: under 1 KB/s for ten minutes.
-            "--speed-limit",
-            "1024",
-            "--speed-time",
-            "600",
-            "--upload-file",
-            path,
-            "--write-out",
-            "\n%{http_code}",
-        ]
-        result = await self.connection.run(
-            _PATH_SETUP + shlex.join(command),
-            input=f'url = "{target}"\n'.encode(),
-            encoding=None,
-            check=False,
+        size, _ = await self._file_version(path)
+        if resume_id:
+            status, body = await self._call(link, "GET", f"/uploads/{resume_id}")
+            if status == 200:
+                upload = _parse_upload(body)
+                if upload.size_bytes == size:
+                    return upload
+            elif status not in (404, 410):
+                raise _refused(status, body, link)
+        name = quote(PurePosixPath(path).name, safe="")
+        status, body = await self._call(
+            link,
+            "POST",
+            f"/uploads?filename={name}&size_bytes={size}",
+            repeatable=False,
         )
-        if result.exit_status != 0:
-            raise UploadFailed(
-                _redact(_text(result.stderr).strip(), link)
-                or f"curl exited with {result.exit_status}"
-            )
-        body, _, status = _text(result.stdout).rpartition("\n")
-        if status != "200":
-            raise UploadFailed(
-                _redact(_studio_error(body, status), link), link_closed=status == "404"
-            )
+        if status != 200:
+            # Only here does a 404 mean the link: elsewhere it can be one upload.
+            raise _refused(status, body, link, link_closed=status == 404)
+        return _parse_upload(body)
+
+    async def send_upload(self, path: str, link: str, upload: StudioUpload) -> None:
+        """
+        Send what an open upload is missing, then assemble it on Studio. A file
+        that changes along the way is discarded rather than assembled from a
+        mix of both versions.
+        """
+        version = await self._file_version(path)
+        await self._send_parts(path, link, upload)
+        if await self._file_version(path) != version:
+            await self._cancel(link, upload)
+            raise UploadFailed("The file changed while it was uploading")
+        await self._complete(link, upload)
+
+    async def upload(self, path: str, link: str) -> None:
+        """Send a file that won't exist to resume, discarding it on Studio if it fails."""
+        upload = await self.open_upload(path, link)
+        try:
+            await self._send_parts(path, link, upload)
+        except UploadFailed:
+            await self._cancel(link, upload)
+            raise
+        await self._complete(link, upload)
 
     @asynccontextmanager
     async def transcoded(
@@ -238,6 +288,111 @@ class Box:
         finally:
             await self._remove_work_dir(work)
 
+    async def _file_version(self, path: str) -> tuple[int, int]:
+        """A file's size and modification time."""
+        result = await self.connection.run(
+            f"stat -f '%z %m' {shlex.quote(path)}", encoding=None, check=False
+        )
+        fields = _decode(result.stdout).split()
+        if result.exit_status != 0 or len(fields) != 2:
+            raise UploadFailed("Couldn't read the file's details on the box")
+        return int(fields[0]), int(fields[1])
+
+    async def _send_parts(self, path: str, link: str, upload: StudioUpload) -> None:
+        remaining = iter(upload.missing)
+
+        async def send_remaining() -> None:
+            # A shared iterator hands each part to exactly one sender.
+            for number in remaining:
+                await self._send_part(path, link, upload, number)
+
+        results = await asyncio.gather(
+            *(send_remaining() for _ in range(PARALLEL_PARTS)),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+    async def _send_part(
+        self, path: str, link: str, upload: StudioUpload, number: int
+    ) -> None:
+        # A part is copied out first so curl sends it with a known length.
+        curl = shlex.join(
+            [*_CURL, "--speed-limit", "1024", "--speed-time", "60", "--upload-file"]
+        )
+        script = (
+            f'slice=$(mktemp "${{TMPDIR:-/tmp}}/bungalo-part.XXXXXX") '
+            f"|| exit {_READ_FAILED}\n"
+            "trap 'rm -f \"$slice\"' EXIT\n"
+            f'dd if={shlex.quote(path)} of="$slice" bs={upload.part_bytes} '
+            f"skip={number - 1} count=1 2>/dev/null || exit {_READ_FAILED}\n"
+            f'{curl} "$slice"\n'
+        )
+        status, body = await self._request(
+            f"/bin/sh -c {shlex.quote(script)}",
+            link,
+            f"/uploads/{upload.upload_id}/parts/{number}",
+        )
+        if status != 204:
+            raise _refused(status, body, link)
+
+    async def _complete(self, link: str, upload: StudioUpload) -> None:
+        status, body = await self._call(
+            link, "POST", f"/uploads/{upload.upload_id}/complete"
+        )
+        if status != 200:
+            raise _refused(status, body, link)
+
+    async def _cancel(self, link: str, upload: StudioUpload) -> None:
+        try:
+            await self._call(link, "DELETE", f"/uploads/{upload.upload_id}")
+        except (UploadFailed, asyncssh.Error, OSError):
+            # Never raised: it would replace the upload's own failure.
+            LOGGER.warning("Couldn't cancel upload %s on Studio", upload.upload_id)
+
+    async def _call(
+        self,
+        link: str,
+        method: StudioMethod,
+        suffix: str,
+        *,
+        repeatable: bool = True,
+    ) -> tuple[int, str]:
+        command = shlex.join([*_CURL, "--max-time", "600", "--request", method])
+        return await self._request(command, link, suffix, repeatable=repeatable)
+
+    async def _request(
+        self, command: str, link: str, suffix: str, *, repeatable: bool = True
+    ) -> tuple[int, str]:
+        """
+        Run a curl command against a Studio link until Studio gives a real
+        answer. A request that isn't `repeatable` is only tried again when it
+        can't have been sent, since Studio would act on it twice.
+        """
+        config = f'url = "{link.rstrip("/")}{suffix}"\n'.encode()
+        attempt = 1
+        while True:
+            result = await self.connection.run(
+                _PATH_SETUP + command, input=config, encoding=None, check=False
+            )
+            if result.exit_status == _READ_FAILED:
+                raise UploadFailed("Couldn't read the file on the box")
+            body, _, code = _decode(result.stdout).rpartition("\n")
+            if result.exit_status == 0 and int(code) not in _RETRYABLE_STATUSES:
+                return int(code), body
+            sent = result.exit_status not in _NEVER_SENT
+            if attempt == STUDIO_ATTEMPTS or (sent and not repeatable):
+                if result.exit_status == 0:
+                    raise _refused(int(code), body, link)
+                raise UploadFailed(
+                    _redact(_decode(result.stderr).strip(), link)
+                    or f"curl exited with {result.exit_status}"
+                )
+            delay = RETRY_DELAY_SECONDS * 2 ** (attempt - 1)
+            await asyncio.sleep(min(delay, MAX_RETRY_DELAY_SECONDS))
+            attempt += 1
+
     async def _make_work_dir(self, work_dir: str) -> str:
         # Reclaim what a crash left behind, but never a folder that could be in use.
         # The leading dot keeps scans from reading one placed on a listed volume.
@@ -252,9 +407,9 @@ class Box:
         )
         if result.exit_status != 0:
             raise UploadFailed(
-                f"Couldn't create a transcode folder: {_text(result.stderr).strip()}"
+                f"Couldn't create a transcode folder: {_decode(result.stderr).strip()}"
             )
-        return _text(result.stdout).strip()
+        return _decode(result.stdout).strip()
 
     async def _run_template(self, source: str, output: str, template: str) -> None:
         # ffmpeg reads stdin unless told not to, so give it nothing to wait on.
@@ -308,7 +463,7 @@ class Box:
         if result.exit_status == 127:
             raise BoxCommandError("ffprobe is not installed on the box")
         try:
-            duration = float(_text(result.stdout).strip())
+            duration = float(_decode(result.stdout).strip())
         except ValueError:
             return None
         return duration if duration > 0 else None
@@ -368,11 +523,11 @@ def read_transcode_template(path: str) -> str:
     return template
 
 
-def _transcode_error(stderr: Any) -> str:
+def _transcode_error(stderr: bytes) -> str:
     """The end of a failed command's output, without ffmpeg's progress lines."""
     lines = [
         line.strip()
-        for line in _text(stderr).replace("\r", "\n").split("\n")
+        for line in _decode(stderr).replace("\r", "\n").split("\n")
         if line.strip() and not _PROGRESS_LINE.match(line.strip())
     ]
     return " / ".join(lines[-3:])[:500] or "no error output"
@@ -380,7 +535,7 @@ def _transcode_error(stderr: Any) -> str:
 
 def _redact(text: str, link: str) -> str:
     """Remove an upload link's token, which is a credential, from text."""
-    return text.replace(link.rsplit("/", 1)[-1], "[upload link]")
+    return text.replace(link.rstrip("/").rsplit("/", 1)[-1], "[upload link]")
 
 
 def _studio_error(body: str, status: str) -> str:
@@ -389,6 +544,21 @@ def _studio_error(body: str, status: str) -> str:
     except (ValueError, AttributeError):
         detail = None
     return detail if isinstance(detail, str) else f"Studio answered HTTP {status}"
+
+
+def _refused(
+    status: int, body: str, link: str, *, link_closed: bool = False
+) -> UploadFailed:
+    return UploadFailed(
+        _redact(_studio_error(body, str(status)), link), link_closed=link_closed
+    )
+
+
+def _parse_upload(body: str) -> StudioUpload:
+    try:
+        return StudioUpload.model_validate_json(body)
+    except ValidationError as error:
+        raise UploadFailed("Studio sent an answer Bungalo couldn't read") from error
 
 
 @asynccontextmanager

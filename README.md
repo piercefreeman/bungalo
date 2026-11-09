@@ -134,7 +134,7 @@ To upload, reply in that thread with the numbers and a public upload link from t
 
 Use `all` instead of numbers to send everything. The link's origin must match `studio_url`, and a comment that selects videos without a valid link gets a reply explaining what's needed. Anyone who can post in the channel can request an upload if they have a valid link. A thread takes comments for 14 days. It then closes with a note, and any videos not uploaded are offered again in a new post the next time their volume is scanned.
 
-Frames are extracted on the Mac, and `curl` uploads directly from the Mac to Studio, so video never passes through the Bungalo server. Before each upload Bungalo confirms the same disk is mounted and the file is unchanged. Upload links are never written to its state file or logs, but they do stay visible in the Slack thread until they expire or are revoked in Studio.
+Frames are extracted on the Mac, and `curl` uploads directly from the Mac to Studio in parts, so video never passes through the Bungalo server. A part that fails is retried, and if an upload stops, even across a Bungalo restart, commenting again with the same link sends only the parts Studio doesn't have. Before each upload Bungalo confirms the same disk is mounted and the file is unchanged. Upload links are never written to its state file or logs, but they do stay visible in the Slack thread until they expire or are revoked in Studio.
 
 ```toml
 [[endpoints.sftp]]
@@ -179,7 +179,7 @@ ffmpeg -hide_banner -i "$INPUT" \
   "$OUTPUT"
 ```
 
-`output_suffix` replaces the source's extension to name the upload, so `C0001.MOV` becomes `C0001_HQ.mp4`; Studio must accept the extension it ends in. `work_dir` needs room for the largest output, and defaults to `/tmp/bungalo-media-ingest` on the Mac's boot disk. Each output is deleted once its upload finishes or fails. If a transcode fails, that video is reported in the thread and the rest continue. A bad or missing template is reported in the thread and nothing is uploaded.
+`output_suffix` replaces the source's extension to name the upload, so `C0001.MOV` becomes `C0001_HQ.mp4`; Studio must accept the extension it ends in. `work_dir` needs room for the largest output, and defaults to `/tmp/bungalo-media-ingest` on the Mac's boot disk. Each output is deleted once its upload finishes or fails, so a transcoded video that fails starts over when requested again. If a transcode fails, that video is reported in the thread and the rest continue. A bad or missing template is reported in the thread and nothing is uploaded.
 
 The Slack app needs the `files:write` scope, which is in `slack_manifest.json`; reinstall the app after adding it. Run this on its own with `bungalo media-ingest`, or add `[media_ingest]` to include it in `run-all`. What has been announced is recorded in `~/.bungalo/media_ingest/state.json`. Delete it to have everything announced again.
 
