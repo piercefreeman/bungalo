@@ -108,6 +108,9 @@ class MediaIngestTranscodeConfig(BaseModel):
     work_dir: str = "/tmp/bungalo-media-ingest"
     """Folder on the box for output while it waits to upload."""
 
+    volumes: list[str] | None = Field(default=None, min_length=1)
+    """Names from media_ingest.volumes to convert; left out, every one of them is."""
+
     @field_validator("output_suffix")
     @classmethod
     def validate_output_suffix(cls, value: str) -> str:
@@ -142,6 +145,17 @@ class MediaIngestConfig(BaseModel):
     transcode: MediaIngestTranscodeConfig | None = None
     """Convert each selected video on the box before uploading it."""
 
+    @model_validator(mode="after")
+    def validate_transcode_volumes(self):
+        listed = self.transcode.volumes if self.transcode else None
+        unknown = sorted(set(listed or []) - set(self.volumes))
+        if unknown:
+            raise ValueError(
+                f"media_ingest.transcode.volumes has {unknown}, "
+                "which media_ingest.volumes doesn't scan"
+            )
+        return self
+
     @field_validator("volumes")
     @classmethod
     def validate_volume_names(cls, value: list[str]) -> list[str]:
@@ -164,6 +178,15 @@ class MediaIngestConfig(BaseModel):
                 "studio_url must be an origin, like https://studio.example.com"
             )
         return value
+
+    def transcode_for(self, volume_name: str) -> MediaIngestTranscodeConfig | None:
+        """How to convert footage from this volume, if it should be converted."""
+        transcode = self.transcode
+        if transcode and (
+            transcode.volumes is None or volume_name in transcode.volumes
+        ):
+            return transcode
+        return None
 
 
 class EndpointConfig(BaseSettings):

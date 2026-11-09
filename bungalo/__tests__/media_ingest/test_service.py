@@ -119,6 +119,7 @@ def _setup(
     tmp_path: Path,
     box: FakeBox,
     transcode: MediaIngestTranscodeConfig | None = None,
+    volumes: list[str] | None = None,
 ) -> tuple[MediaIngest, FakeSlack]:
     slack = FakeSlack()
 
@@ -130,7 +131,7 @@ def _setup(
         settings=MediaIngestConfig(
             ssh_endpoint="mac",
             studio_url=STUDIO,
-            volumes=["CARD"],
+            volumes=volumes or ["CARD"],
             transcode=transcode,
         ),
         slack=cast(SlackClient, slack),
@@ -292,12 +293,98 @@ async def test_upload_follows_a_disk_to_its_conflict_renamed_mount(
     assert box.uploads == [("/Volumes/CARD 1/a.mp4", LINK)]
 
 
-def _transcode_config(tmp_path: Path) -> MediaIngestTranscodeConfig:
+def _transcode_config(
+    tmp_path: Path, volumes: list[str] | None = None
+) -> MediaIngestTranscodeConfig:
     template = tmp_path / "t.sh"
     template.write_text(TEMPLATE)
     return MediaIngestTranscodeConfig(
-        template=str(template), output_suffix="_HQ.mp4", work_dir="/w"
+        template=str(template), output_suffix="_HQ.mp4", work_dir="/w", volumes=volumes
     )
+
+
+@pytest.mark.asyncio
+async def test_a_listed_volume_is_transcoded(tmp_path: Path) -> None:
+    box = FakeBox([_volume("a.mov")])
+    config = _transcode_config(tmp_path, volumes=["CARD"])
+    ingest, slack = _setup(tmp_path, box, config, volumes=["CARD", "NINJAV"])
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+
+    assert box.uploads == [("/w/job/a_HQ.mp4", LINK)]
+    assert "not these originals" in slack.posts[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_an_unlisted_volume_uploads_its_originals(tmp_path: Path) -> None:
+    box = FakeBox([_volume("a.mov")])
+    config = _transcode_config(tmp_path, volumes=["NINJAV"])
+    ingest, slack = _setup(tmp_path, box, config, volumes=["CARD", "NINJAV"])
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+
+    assert box.transcodes == []
+    assert box.uploads == [("/Volumes/CARD/a.mov", LINK)]
+    assert box.resumed == [None]
+    assert not any(text.startswith("Transcoding") for text in slack.status_updates)
+    assert "Reply `DELETE`" in slack.posts[-1][0]
+    assert "not these originals" not in slack.posts[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_an_unlisted_volume_resumes_across_a_restart(tmp_path: Path) -> None:
+    box = FakeBox([_volume("a.mov")])
+    box.upload_errors["/Volumes/CARD/a.mov"] = UploadFailed("Lost it")
+    config = _transcode_config(tmp_path, volumes=["NINJAV"])
+    ingest, slack = _setup(tmp_path, box, config, volumes=["CARD", "NINJAV"])
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+
+    box.upload_errors.clear()
+    restarted, slack = _setup(tmp_path, box, config, volumes=["CARD", "NINJAV"])
+    slack.replies = [{"ts": "201.0", "user": "U", "text": f"1 {LINK}"}]
+    await restarted.check_comments_once()
+
+    assert box.resumed == [None, "fresh-id"]
+    assert box.uploads == [("/Volumes/CARD/a.mov", LINK)]
+    assert box.transcodes == []
+
+
+@pytest.mark.asyncio
+async def test_delete_warning_follows_what_was_uploaded_not_the_config(
+    tmp_path: Path,
+) -> None:
+    box = FakeBox([_volume("a.mov", "b.mov")])
+    ingest, slack = _setup(tmp_path, box, _transcode_config(tmp_path))
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+
+    config = _transcode_config(tmp_path, volumes=["NINJAV"])
+    restarted, slack = _setup(tmp_path, box, config, volumes=["CARD", "NINJAV"])
+    slack.replies = [{"ts": "201.0", "user": "U", "text": f"2 {LINK}"}]
+    await restarted.check_comments_once()
+
+    offer = slack.posts[-1][0]
+    assert "#1 `a.mov`" in offer and "#2 `b.mov`" in offer
+    assert "Studio only has transcoded versions of #1." in offer
+
+
+@pytest.mark.asyncio
+async def test_a_bad_template_only_stops_volumes_that_use_it(tmp_path: Path) -> None:
+    config = _transcode_config(tmp_path, volumes=["NINJAV"])
+    Path(config.template).write_text("ffmpeg -i a.mov b.mp4")
+    box = FakeBox([_volume("a.mov")])
+    ingest, slack = _setup(tmp_path, box, config, volumes=["CARD", "NINJAV"])
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+
+    assert box.uploads == [("/Volumes/CARD/a.mov", LINK)]
+    assert slack.status_updates[-1] == "Uploaded 1 of 1 to Studio."
 
 
 @pytest.mark.asyncio

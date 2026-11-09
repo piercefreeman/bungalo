@@ -280,11 +280,7 @@ class MediaIngest:
             return
 
         count = f"{len(videos)} uploaded video{'' if len(videos) == 1 else 's'}"
-        copies = (
-            " Studio has the transcoded versions, not these originals."
-            if self.settings.transcode
-            else ""
-        )
+        copies = _transcoded_warning(videos)
         pages = _pages(
             [
                 f"Reply `DELETE` to permanently remove {count} from "
@@ -399,7 +395,7 @@ class MediaIngest:
                     "Comment again once it's back."
                 )
             current = {video.relative_path: video for video in volume.files}
-            transcode = self.settings.transcode
+            transcode = self.settings.transcode_for(batch.volume_name)
             template: str | None = None
             if transcode:
                 try:
@@ -453,6 +449,7 @@ class MediaIngest:
                     continue
                 video.uploaded_to.append(link_hash)
                 video.upload_ids.pop(link_hash, None)
+                video.original_uploaded = video.original_uploaded or not transcode
                 batch.delete_offer_due = True
                 self.store.save(self.state)
                 uploaded += 1
@@ -466,6 +463,17 @@ class MediaIngest:
 def _offerable(batch: Batch) -> list[BatchVideo]:
     """Videos Studio has confirmed that are still on their volume."""
     return [v for v in batch.videos if v.uploaded_to and not v.deleted]
+
+
+def _transcoded_warning(videos: list[BatchVideo]) -> str:
+    """Say which offered videos Studio doesn't have the original of."""
+    transcoded = [v for v in videos if not v.original_uploaded]
+    if len(transcoded) == len(videos):
+        return " Studio has the transcoded versions, not these originals."
+    if transcoded:
+        numbers = ", ".join(f"#{v.number}" for v in transcoded)
+        return f" Studio only has transcoded versions of {numbers}."
+    return ""
 
 
 def _pages(lines: list[str]) -> list[str]:

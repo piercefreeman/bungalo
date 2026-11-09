@@ -134,7 +134,7 @@ To upload, reply in that thread with the numbers and a public upload link from t
 
 Use `all` instead of numbers to send everything. The link's origin must match `studio_url`, and a comment that selects videos without a valid link gets a reply explaining what's needed. Anyone who can post in the channel can request an upload if they have a valid link. A thread takes comments for 14 days. It then closes with a note, and any videos not uploaded are offered again in a new post the next time their volume is scanned.
 
-After a video uploads, Bungalo asks in the same thread whether to remove it from the volume. Reply exactly `DELETE` after the latest list to permanently remove the videos on it. Each file is checked again on the Mac as it's removed, and left alone if it changed or its disk was swapped. Network shares have no disk ID to check, so Bungalo won't offer to delete from them. Only the video files are removed, so sidecar files stay. With a transcode template, Studio has the transcoded version, not the original. Anyone who can post in the channel can confirm a delete.
+After a video uploads, Bungalo asks in the same thread whether to remove it from the volume. Reply exactly `DELETE` after the latest list to permanently remove the videos on it. Each file is checked again on the Mac as it's removed, and left alone if it changed or its disk was swapped. Network shares have no disk ID to check, so Bungalo won't offer to delete from them. Only the video files are removed, so sidecar files stay. For a volume that's transcoded, Studio has the transcoded version, not the original. Anyone who can post in the channel can confirm a delete.
 
 Frames are extracted on the Mac, and `curl` uploads directly from the Mac to Studio in parts, so video never passes through the Bungalo server. A part that fails is retried, and if an upload stops, even across a Bungalo restart, commenting again with the same link sends only the parts Studio doesn't have. Before each upload Bungalo confirms the same disk is mounted and the file is unchanged. Upload links are never written to its state file or logs, but they do stay visible in the Slack thread until they expire or are revoked in Studio.
 
@@ -166,7 +166,10 @@ To convert selected videos on the Mac before they upload, add a template:
   template = "/root/.bungalo/media_ingest/transcode.sh"
   output_suffix = "_HQ.mp4"
   work_dir = "/Volumes/Scratch/bungalo"
+  volumes = ["NINJAV"]
 ```
+
+`volumes` is optional and limits conversion to those names from `media_ingest.volumes`. Without it, every scanned volume is converted. Videos from any other volume upload as recorded, keeping their own filenames and resuming part by part.
 
 The template is a shell script stored on the Bungalo server, so use its container path. It runs on the Mac under `/bin/sh -e` once per selected video, and is re-read for each request, so edits apply without a restart. Quote its two variables so any filename is safe:
 

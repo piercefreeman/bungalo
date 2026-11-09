@@ -25,6 +25,9 @@ class BatchVideo(BaseModel):
     upload_ids: dict[str, UploadSessionID] = Field(default_factory=dict)
     """Studio's id for an unfinished upload of this video, by link hash."""
 
+    original_uploaded: bool = False
+    """Whether Studio received this file itself, rather than only a transcode."""
+
     deleted: bool = False
     """Whether someone confirmed removing this video from its volume."""
 
