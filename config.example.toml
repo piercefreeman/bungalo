@@ -84,3 +84,4 @@ self_ip = "100.64.0.10"
 #   template = "/root/.bungalo/media_ingest/transcode.sh"
 #   output_suffix = "_HQ.mp4"  # C0001.MOV uploads as C0001_HQ.mp4
 #   work_dir = "/tmp/bungalo-media-ingest"  # needs room for the largest output
+#   volumes = ["CARD"]  # only convert these; left out, every volume is converted

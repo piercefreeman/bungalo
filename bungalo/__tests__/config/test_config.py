@@ -370,3 +370,32 @@ def test_config_requires_valid_volume_names(volumes: list[str]) -> None:
 def test_transcode_config_is_validated(fields: dict[str, str]) -> None:
     with pytest.raises(ValidationError):
         MediaIngestTranscodeConfig.model_validate({"template": "/t.sh", **fields})
+
+
+def _media_ingest(transcode_volumes: list[str] | None) -> MediaIngestConfig:
+    return MediaIngestConfig(
+        ssh_endpoint="m",
+        studio_url=STUDIO,
+        volumes=["NINJAV", "Untitled"],
+        transcode=MediaIngestTranscodeConfig(
+            template="/t.sh", output_suffix=".mp4", volumes=transcode_volumes
+        ),
+    )
+
+
+def test_transcode_applies_only_to_its_listed_volumes() -> None:
+    config = _media_ingest(["NINJAV"])
+    assert config.transcode_for("NINJAV") is config.transcode
+    assert config.transcode_for("Untitled") is None
+
+
+def test_transcode_without_a_list_applies_to_every_volume() -> None:
+    config = _media_ingest(None)
+    assert config.transcode_for("NINJAV") is config.transcode
+    assert config.transcode_for("Untitled") is config.transcode
+
+
+@pytest.mark.parametrize("volumes", [[], ["CARD"], ["NINJAV", "CARD"]])
+def test_transcode_volumes_must_be_scanned(volumes: list[str]) -> None:
+    with pytest.raises(ValidationError):
+        _media_ingest(volumes)
