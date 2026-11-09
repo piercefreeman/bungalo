@@ -3,10 +3,19 @@ Announces new footage on a remote Mac's volumes in Slack, and uploads whatever
 people pick by commenting on the contact sheet, then offers to remove what was
 uploaded from the volume. Comments are polled rather than streamed so none are
 lost to a restart or a long upload.
+
+Each thread works through its comments in order, so a `DELETE` can't overtake
+an upload, while threads run side by side: footage that needs no transcode
+never waits behind footage that does. Each video of a comment is its own task,
+and what limits them is the hardware: one read of each volume, and one
+transcode, at a time. A finished transcode uploads while the next one runs.
 """
 
 import asyncio
-from collections.abc import Callable
+from collections import defaultdict
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, nullcontext
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -14,7 +23,7 @@ from typing import AsyncContextManager
 
 from bungalo.app_manager import AppManager
 from bungalo.config import BungaloConfig
-from bungalo.config.config import MediaIngestConfig
+from bungalo.config.config import MediaIngestConfig, MediaIngestTranscodeConfig
 from bungalo.constants import DEFAULT_MEDIA_INGEST_STATE_FILE
 from bungalo.logger import CONSOLE, LOGGER
 from bungalo.media_ingest.box import (
@@ -52,6 +61,13 @@ from bungalo.slack import SlackClient, SlackMessage
 SERVICE_NAME = "media_ingest"
 BATCH_LIFETIME = timedelta(days=14)
 CONCURRENT_VIDEOS = 4
+# Parallel reads of one disk make every one of them slower.
+READS_PER_VOLUME = 1
+TRANSCODES_AT_ONCE = 1
+# Per reply: its videos share one SSH connection, where sshd allows 10 sessions
+# by default and an upload uses 4. Also caps finished outputs waiting on the box.
+TRANSCODED_VIDEOS_AT_ONCE = 2
+ACKNOWLEDGE_EMOJI = "eyes"
 # Slack quietly truncates long messages, which would hide files from a delete list.
 MAX_MESSAGE_CHARS = 8000
 
@@ -74,6 +90,33 @@ def format_duration(duration: float | None) -> str:
     return f"{hours}:{minutes:02}:{seconds:02}" if hours else f"{minutes}:{seconds:02}"
 
 
+class _LinkClosed(Exception):
+    """Another video found the link closed before this one got its turn."""
+
+
+@dataclass
+class _UploadJob:
+    """One reply's videos on their way to a Studio link, each in its own task."""
+
+    batch: Batch
+    box: Box
+    volume: Volume
+    files: dict[str, VideoFile]
+    link: str
+    link_hash: str
+    status: SlackMessage
+    transcode: MediaIngestTranscodeConfig | None
+    template: str | None
+    labels: dict[int, str]
+    lines: dict[int, str] = field(default_factory=dict)
+    failures: dict[int, str] = field(default_factory=dict)
+    uploaded: int = 0
+    link_closed: bool = False
+    transcoded_videos: asyncio.Semaphore = field(
+        default_factory=lambda: asyncio.Semaphore(TRANSCODED_VIDEOS_AT_ONCE)
+    )
+
+
 class MediaIngest:
     def __init__(
         self,
@@ -88,6 +131,12 @@ class MediaIngest:
         self.store = store
         self.connect = connect
         self.state: IngestState = store.load()
+        self._thread_work: dict[str, asyncio.Task[None]] = {}
+        self._acknowledged: set[str] = set()
+        self._volume_reads: defaultdict[str, asyncio.Semaphore] = defaultdict(
+            lambda: asyncio.Semaphore(READS_PER_VOLUME)
+        )
+        self._transcodes = asyncio.Semaphore(TRANSCODES_AT_ONCE)
 
     async def scan_once(self) -> ScanResult:
         """Connect to the box and post a contact sheet for each volume's new videos."""
@@ -103,14 +152,44 @@ class MediaIngest:
                     await self._announce(box, volume, new)
         return scan
 
-    async def check_comments_once(self) -> None:
-        """Act on comments made since the last check, then close expired threads."""
-        cutoff = datetime.now(timezone.utc) - BATCH_LIFETIME
+    async def poll_comments(self) -> None:
+        """
+        Acknowledge every new comment and set each idle thread to work on its
+        own, returning without waiting for any of that work.
+        """
         for batch in list(self.state.batches):
             parent = SlackMessage(tid=batch.thread_ts)
-            replies = await self.slack.list_thread_replies(
-                parent, after_ts=batch.last_reply_ts
+            cursor = batch.last_reply_ts
+            replies = await self.slack.list_thread_replies(parent, after_ts=cursor)
+            for reply in replies:
+                if reply["ts"] not in self._acknowledged:
+                    self._acknowledged.add(reply["ts"])
+                    await self.slack.add_reaction(
+                        SlackMessage(tid=reply["ts"]), ACKNOWLEDGE_EMOJI
+                    )
+            # Its worker may have moved on, or closed it, while Slack answered.
+            if (
+                batch.thread_ts in self._thread_work
+                or batch.last_reply_ts != cursor
+                or batch not in self.state.batches
+            ):
+                continue
+            task = asyncio.create_task(self._work_through(batch, parent, replies))
+            self._thread_work[batch.thread_ts] = task
+            task.add_done_callback(
+                lambda _, thread=batch.thread_ts: self._thread_work.pop(thread)
             )
+
+    async def check_comments_once(self) -> None:
+        """One whole pass: poll, then wait for everything still running to finish."""
+        await self.poll_comments()
+        await asyncio.gather(*self._thread_work.values())
+
+    async def _work_through(
+        self, batch: Batch, parent: SlackMessage, replies: list[dict[str, str]]
+    ) -> None:
+        """Act on one thread's comments in order, then close it if it has expired."""
+        try:
             for reply in replies:
                 await self._handle_comment(
                     batch, parent, reply.get("text", ""), reply["ts"]
@@ -122,9 +201,13 @@ class MediaIngest:
             if batch.delete_offer_due:
                 await self._offer_delete(batch, parent)
             # A list that was just posted still gets its full time to be answered.
+            cutoff = datetime.now(timezone.utc) - BATCH_LIFETIME
             offered_at = batch.delete_offer and batch.delete_offer.offered_at
             if max(batch.created_at, offered_at or batch.created_at) < cutoff:
                 await self._close(batch, parent)
+        except Exception as error:
+            # Its cursor hasn't moved, so the next poll tries this comment again.
+            LOGGER.error("Checking Slack comments failed: %s", error)
 
     async def _close(self, batch: Batch, parent: SlackMessage) -> None:
         """Stop reading a thread, and offer its unsent videos again on a later scan."""
@@ -403,61 +486,120 @@ class MediaIngest:
                 except (OSError, ValueError) as error:
                     return f"Nothing uploaded: the transcode template failed: {error}"
 
-            uploaded = 0
-            failures: list[str] = []
-            for index, video in enumerate(pending, start=1):
-                progress = (
-                    f"{index} of {len(pending)}: "
+            job = _UploadJob(
+                batch=batch,
+                box=box,
+                volume=volume,
+                files=current,
+                link=request.link,
+                link_hash=link_hash,
+                status=status,
+                transcode=transcode,
+                template=template,
+                labels={
+                    video.number: f"{index} of {len(pending)}: "
                     f"#{video.number} ({format_size(video.size)})"
-                )
-                action = "Transcoding" if transcode else "Uploading"
-                await self.slack.update_status(status, f"{action} {progress}")
-                file = current.get(video.relative_path)
-                if file is None or file.fingerprint != video.fingerprint:
-                    failures.append(f"#{video.number}: changed or removed on the disk")
-                    continue
-                try:
-                    if transcode and template:
-                        output_name = (
-                            PurePosixPath(file.name).stem + transcode.output_suffix
-                        )
-                        async with box.transcoded(
-                            volume.path_of(file),
-                            output_name,
-                            template,
-                            transcode.work_dir,
-                        ) as output:
-                            await self.slack.update_status(
-                                status, f"Uploading {progress}"
-                            )
-                            await box.upload(output, request.link)
-                    else:
-                        source = volume.path_of(file)
-                        started = await box.open_upload(
-                            source,
-                            request.link,
-                            resume_id=video.upload_ids.get(link_hash),
-                        )
-                        # Saved before any part is sent, so a restart can resume.
-                        video.upload_ids[link_hash] = started.upload_id
-                        self.store.save(self.state)
-                        await box.send_upload(source, request.link, started)
-                except UploadFailed as error:
-                    failures.append(f"#{video.number}: {error.reason}")
-                    if error.link_closed:
-                        break
-                    continue
-                video.uploaded_to.append(link_hash)
-                video.upload_ids.pop(link_hash, None)
-                video.original_uploaded = video.original_uploaded or not transcode
-                batch.delete_offer_due = True
-                self.store.save(self.state)
-                uploaded += 1
+                    for index, video in enumerate(pending, start=1)
+                },
+            )
+            job.lines = {
+                number: f"Waiting for its turn: {label}"
+                for number, label in job.labels.items()
+            }
+            await self.slack.update_status(status, "\n".join(job.lines.values()))
+            # One failing outright (the box dropping) stops the rest, as it can't reach them.
+            try:
+                async with asyncio.TaskGroup() as group:
+                    for video in pending:
+                        group.create_task(self._send_video(job, video))
+            except ExceptionGroup as errors:
+                raise errors.exceptions[0] from None
 
-        lines = [f"Uploaded {uploaded} of {len(pending)} to Studio."]
+        lines = [f"Uploaded {job.uploaded} of {len(pending)} to Studio."]
+        failures = [job.failures[v.number] for v in pending if v.number in job.failures]
         if failures:
             lines += ["Not uploaded:", *(f"- {failure}" for failure in failures)]
         return "\n".join(lines)
+
+    async def _send_video(self, job: _UploadJob, video: BatchVideo) -> None:
+        """Send one video, recording how it went; the box dropping is left to raise."""
+        file = job.files.get(video.relative_path)
+        if file is None or file.fingerprint != video.fingerprint:
+            job.lines.pop(video.number)
+            job.failures[video.number] = (
+                f"#{video.number}: changed or removed on the disk"
+            )
+            return
+        try:
+            if job.transcode:
+                async with job.transcoded_videos:
+                    await self._send_transcoded(job, video, file)
+            else:
+                await self._send_original(job, video, file)
+        except _LinkClosed:
+            return
+        except UploadFailed as error:
+            job.failures[video.number] = f"#{video.number}: {error.reason}"
+            job.link_closed = job.link_closed or error.link_closed
+            return
+        finally:
+            job.lines.pop(video.number)
+        video.uploaded_to.append(job.link_hash)
+        video.upload_ids.pop(job.link_hash, None)
+        video.original_uploaded = video.original_uploaded or not job.transcode
+        job.batch.delete_offer_due = True
+        self.store.save(self.state)
+        job.uploaded += 1
+
+    async def _send_original(
+        self, job: _UploadJob, video: BatchVideo, file: VideoFile
+    ) -> None:
+        source = job.volume.path_of(file)
+        async with self._turn(job, video, "Uploading"):
+            started = await job.box.open_upload(
+                source, job.link, resume_id=video.upload_ids.get(job.link_hash)
+            )
+            # Saved before any part is sent, so a restart can resume.
+            video.upload_ids[job.link_hash] = started.upload_id
+            self.store.save(self.state)
+            await job.box.send_upload(source, job.link, started)
+
+    async def _send_transcoded(
+        self, job: _UploadJob, video: BatchVideo, file: VideoFile
+    ) -> None:
+        assert job.transcode and job.template
+        async with job.box.transcoded(
+            job.volume.path_of(file),
+            PurePosixPath(file.name).stem + job.transcode.output_suffix,
+            job.template,
+            job.transcode.work_dir,
+            gate=self._turn(job, video, "Transcoding", transcoding=True),
+        ) as output:
+            await self._show(job, video, "Uploading")
+            await job.box.upload(output, job.link)
+
+    @asynccontextmanager
+    async def _turn(
+        self,
+        job: _UploadJob,
+        video: BatchVideo,
+        action: str,
+        *,
+        transcoding: bool = False,
+    ) -> AsyncIterator[None]:
+        """Hold this video's share of the hardware for as long as it reads the disk."""
+        read = self._volume_reads[job.batch.volume_id]
+        # Encoder first, so a video waiting for it doesn't also hold up its disk.
+        async with self._transcodes if transcoding else nullcontext(), read:
+            if job.link_closed:
+                raise _LinkClosed
+            await self._show(job, video, action)
+            yield
+
+    async def _show(self, job: _UploadJob, video: BatchVideo, action: str) -> None:
+        """Update this video's line of the reply's one status message."""
+        job.lines[video.number] = f"{action} {job.labels[video.number]}"
+        await self.slack.update_status(job.status, "\n".join(job.lines.values()))
 
 
 def _offerable(batch: Batch) -> list[BatchVideo]:
@@ -492,7 +634,7 @@ def _pages(lines: list[str]) -> list[str]:
 async def _comment_loop(ingest: MediaIngest, interval: float) -> None:
     while True:
         try:
-            await ingest.check_comments_once()
+            await ingest.poll_comments()
         except Exception as error:
             LOGGER.error("Checking Slack comments failed: %s", error)
         await asyncio.sleep(interval)

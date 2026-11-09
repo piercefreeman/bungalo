@@ -132,7 +132,7 @@ To upload, reply in that thread with the numbers and a public upload link from t
 
 > 1 3 5-8 https://studio.example.com/public-upload/KEY
 
-Use `all` instead of numbers to send everything. The link's origin must match `studio_url`, and a comment that selects videos without a valid link gets a reply explaining what's needed. Anyone who can post in the channel can request an upload if they have a valid link. A thread takes comments for 14 days. It then closes with a note, and any videos not uploaded are offered again in a new post the next time their volume is scanned.
+Use `all` instead of numbers to send everything. The link's origin must match `studio_url`, and a comment that selects videos without a valid link gets a reply explaining what's needed. Anyone who can post in the channel can request an upload if they have a valid link. Bungalo adds :eyes: to every comment as soon as it reads it. Comments in one thread run in order, while different threads run side by side, so footage that needs no transcode starts straight away. Each volume is read for one video at a time, and only one transcode runs at a time, though a finished transcode uploads while the next one runs. A thread takes comments for 14 days. It then closes with a note, and any videos not uploaded are offered again in a new post the next time their volume is scanned.
 
 After a video uploads, Bungalo asks in the same thread whether to remove it from the volume. Reply exactly `DELETE` after the latest list to permanently remove the videos on it. Each file is checked again on the Mac as it's removed, and left alone if it changed or its disk was swapped. Network shares have no disk ID to check, so Bungalo won't offer to delete from them. Only the video files are removed, so sidecar files stay. For a volume that's transcoded, Studio has the transcoded version, not the original. Anyone who can post in the channel can confirm a delete.
 
@@ -186,7 +186,7 @@ ffmpeg -hide_banner -i "$INPUT" \
 
 `output_suffix` replaces the source's extension to name the upload, so `C0001.MOV` becomes `C0001_HQ.mp4`; Studio must accept the extension it ends in. `work_dir` needs room for the largest output, and defaults to `/tmp/bungalo-media-ingest` on the Mac's boot disk. Each output is deleted once its upload finishes or fails, so a transcoded video that fails starts over when requested again. If a transcode fails, that video is reported in the thread and the rest continue. A bad or missing template is reported in the thread and nothing is uploaded.
 
-The Slack app needs the `files:write` scope, which is in `slack_manifest.json`; reinstall the app after adding it. Run this on its own with `bungalo media-ingest`, or add `[media_ingest]` to include it in `run-all`. What has been announced is recorded in `~/.bungalo/media_ingest/state.json`. Delete it to have everything announced again.
+The Slack app needs the `files:write` and `reactions:write` scopes, which are in `slack_manifest.json`; reinstall the app after adding them. Run this on its own with `bungalo media-ingest`, or add `[media_ingest]` to include it in `run-all`. What has been announced is recorded in `~/.bungalo/media_ingest/state.json`. Delete it to have everything announced again.
 
 ### Home Assistant
 

@@ -1,13 +1,17 @@
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
+from slack_sdk.errors import SlackApiError
+from slack_sdk.web.async_client import AsyncWebClient
 
 from bungalo.config.config import MediaIngestConfig, MediaIngestTranscodeConfig
 from bungalo.media_ingest.box import (
@@ -48,6 +52,17 @@ class FakeBox:
         self.resumed: list[UploadSessionID | None] = []
         self.deleted: list[str] = []
         self.delete_errors: dict[str, BoxCommandError] = {}
+        self.hold: dict[str, asyncio.Event] = {}
+        self.reading = 0
+        self.most_reading = 0
+
+    async def _read(self, path: str) -> None:
+        self.reading += 1
+        self.most_reading = max(self.most_reading, self.reading)
+        await asyncio.sleep(0)
+        if path in self.hold:
+            await self.hold[path].wait()
+        self.reading -= 1
 
     async def scan(self, ignored: list[str]) -> ScanResult:
         return ScanResult(self.volumes)
@@ -56,15 +71,18 @@ class FakeBox:
         return 10.0, [_jpeg()] * 5
 
     @asynccontextmanager
-    async def transcoded(self, source, output_name, template, work_dir):
-        self.transcodes.append((source, output_name, template, work_dir))
-        if self.transcode_error:
-            raise self.transcode_error
+    async def transcoded(self, source, output_name, template, work_dir, gate):
+        async with gate:
+            self.transcodes.append((source, output_name, template, work_dir))
+            if self.transcode_error:
+                raise self.transcode_error
+            await self._read(source)
         yield f"{work_dir}/job/{output_name}"
 
     async def upload(self, path: str, link: str) -> None:
         if path in self.upload_errors:
             raise self.upload_errors[path]
+        await self._read(path)
         self.uploads.append((path, link))
 
     async def delete(self, volume: Volume, video: VideoFile) -> None:
@@ -94,6 +112,8 @@ class FakeSlack:
         self.status_updates: list[str] = []
         self.files: list[str] = []
         self.replies: list[dict[str, str]] = []
+        self.thread_replies: dict[str, list[dict[str, str]]] = {}
+        self.reactions: list[tuple[str, str]] = []
         self.upload_error: Exception | None = None
         self.delete_message = AsyncMock()
 
@@ -112,7 +132,11 @@ class FakeSlack:
         self.files.append(filename)
 
     async def list_thread_replies(self, parent, *, after_ts):
-        return [r for r in self.replies if float(r["ts"]) > float(after_ts)]
+        replies = self.thread_replies.get(parent.tid, self.replies)
+        return [r for r in replies if float(r["ts"]) > float(after_ts)]
+
+    async def add_reaction(self, message: SlackMessage, emoji: str) -> None:
+        self.reactions.append((message.tid, emoji))
 
 
 def _setup(
@@ -752,3 +776,286 @@ async def test_a_list_posted_at_expiry_can_still_be_answered(tmp_path: Path) -> 
     await ingest.check_comments_once()
     assert box.deleted == ["/Volumes/CARD/a.mp4"]
     assert ingest.state.batches == []
+
+
+def _named_volume(name: str, *files: str) -> Volume:
+    return Volume(
+        id=f"uuid:{name}",
+        name=name,
+        mount_point=f"/Volumes/{name}",
+        files=[VideoFile(file, 1000, 5) for file in files],
+    )
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    async with asyncio.timeout(2):
+        while not condition():
+            await asyncio.sleep(0.001)
+
+
+async def _let_others_run() -> None:
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+
+def _thread_of(ingest: MediaIngest, volume_id: str) -> str:
+    return next(b.thread_ts for b in ingest.state.batches if b.volume_id == volume_id)
+
+
+def _ask(ts: str = "200.0", text: str = f"all {LINK}") -> list[dict[str, str]]:
+    return [{"ts": ts, "user": "U", "text": text}]
+
+
+@pytest.mark.asyncio
+async def test_footage_with_no_transcode_doesnt_wait_behind_footage_with_one(
+    tmp_path: Path,
+) -> None:
+    box = FakeBox([_named_volume("CARD", "a.mov"), _named_volume("NINJAV", "b.mov")])
+    release = box.hold["/Volumes/NINJAV/b.mov"] = asyncio.Event()
+    config = _transcode_config(tmp_path, volumes=["NINJAV"])
+    ingest, slack = _setup(tmp_path, box, config, volumes=["CARD", "NINJAV"])
+    await ingest.scan_once()
+    slack.thread_replies = {
+        _thread_of(ingest, "uuid:CARD"): _ask(),
+        _thread_of(ingest, "uuid:NINJAV"): _ask(),
+    }
+
+    await ingest.poll_comments()
+    await _until(lambda: box.uploads == [("/Volumes/CARD/a.mov", LINK)])
+    await _let_others_run()
+    assert len(box.uploads) == 1
+
+    release.set()
+    await ingest.check_comments_once()
+    assert box.uploads[1] == ("/w/job/b_HQ.mp4", LINK)
+
+
+@pytest.mark.asyncio
+async def test_a_volume_is_only_read_for_one_video_at_a_time(tmp_path: Path) -> None:
+    box = FakeBox([_named_volume("CARD", "a.mov")])
+    release = box.hold["/Volumes/CARD/a.mov"] = asyncio.Event()
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    box.volumes[0].files.append(VideoFile("b.mov", 1000, 5))
+    await ingest.scan_once()
+    first, second = (batch.thread_ts for batch in ingest.state.batches)
+    slack.thread_replies = {first: _ask(), second: _ask()}
+
+    await ingest.poll_comments()
+    await _until(lambda: box.reading == 1)
+    await _let_others_run()
+    assert box.uploads == []
+    assert "Waiting for its turn: 1 of 1: #1 (1000 B)" in slack.status_updates
+
+    release.set()
+    await ingest.check_comments_once()
+    assert sorted(path for path, _ in box.uploads) == [
+        "/Volumes/CARD/a.mov",
+        "/Volumes/CARD/b.mov",
+    ]
+    assert box.most_reading == 1
+
+
+@pytest.mark.asyncio
+async def test_one_transcode_at_a_time_but_not_through_its_upload(
+    tmp_path: Path,
+) -> None:
+    box = FakeBox([_named_volume("ONE", "a.mov"), _named_volume("TWO", "b.mov")])
+    transcoding = box.hold["/Volumes/ONE/a.mov"] = asyncio.Event()
+    uploading = box.hold["/w/job/a_HQ.mp4"] = asyncio.Event()
+    ingest, slack = _setup(
+        tmp_path, box, _transcode_config(tmp_path), volumes=["ONE", "TWO"]
+    )
+    await ingest.scan_once()
+    slack.thread_replies = {
+        _thread_of(ingest, "uuid:ONE"): _ask(),
+        _thread_of(ingest, "uuid:TWO"): _ask(),
+    }
+
+    await ingest.poll_comments()
+    await _until(lambda: len(box.transcodes) == 1)
+    await _let_others_run()
+    assert len(box.transcodes) == 1
+
+    transcoding.set()
+    await _until(lambda: len(box.transcodes) == 2)
+    uploading.set()
+    await ingest.check_comments_once()
+    assert len(box.uploads) == 2
+
+
+@pytest.mark.asyncio
+async def test_every_comment_is_acknowledged_at_once_even_on_a_busy_thread(
+    tmp_path: Path,
+) -> None:
+    box = FakeBox([_volume("a.mov")])
+    release = box.hold["/Volumes/CARD/a.mov"] = asyncio.Event()
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    slack.replies = _ask()
+
+    await ingest.poll_comments()
+    await _until(lambda: box.reading == 1)
+    slack.replies = [*_ask(), *_ask("201.0", "nice shot")]
+    await ingest.poll_comments()
+    await ingest.poll_comments()
+
+    assert slack.reactions == [("200.0", "eyes"), ("201.0", "eyes")]
+    assert box.uploads == []
+
+    release.set()
+    await ingest.check_comments_once()
+    await ingest.check_comments_once()
+    assert len(box.uploads) == 1
+    assert ingest.state.batches[0].last_reply_ts == "201.0"
+
+
+@pytest.mark.asyncio
+async def test_a_comment_finished_while_slack_answers_isnt_acted_on_twice(
+    tmp_path: Path,
+) -> None:
+    box = FakeBox([_volume("a.mov")])
+    release = box.hold["/Volumes/CARD/a.mov"] = asyncio.Event()
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    slack.replies = _ask()
+    await ingest.poll_comments()
+    await _until(lambda: box.reading == 1)
+    listing = slack.list_thread_replies
+
+    async def finishing_meanwhile(parent, *, after_ts):
+        answer = await listing(parent, after_ts=after_ts)
+        release.set()
+        await asyncio.gather(*ingest._thread_work.values())
+        return answer
+
+    slack.list_thread_replies = finishing_meanwhile  # type: ignore[method-assign]
+    await ingest.poll_comments()
+    slack.list_thread_replies = listing  # type: ignore[method-assign]
+    await ingest.check_comments_once()
+
+    assert box.uploads == [("/Volumes/CARD/a.mov", LINK)]
+
+
+@pytest.mark.asyncio
+async def test_a_thread_that_fails_is_retried_without_stopping_the_others(
+    tmp_path: Path,
+) -> None:
+    box = FakeBox([_named_volume("ONE", "a.mov"), _named_volume("TWO", "b.mov")])
+    ingest, slack = _setup(tmp_path, box, volumes=["ONE", "TWO"])
+    await ingest.scan_once()
+    broken = _thread_of(ingest, "uuid:ONE")
+    slack.thread_replies = {broken: _ask(), _thread_of(ingest, "uuid:TWO"): _ask()}
+    posting = slack.create_status
+
+    async def failing_once(text, parent_ts=None):
+        if parent_ts and parent_ts.tid == broken and text.startswith("Uploading"):
+            slack.create_status = posting  # type: ignore[method-assign]
+            raise OSError("Slack went away")
+        return await posting(text, parent_ts)
+
+    slack.create_status = failing_once  # type: ignore[method-assign]
+    await ingest.check_comments_once()
+    assert [path for path, _ in box.uploads] == ["/Volumes/TWO/b.mov"]
+
+    await ingest.check_comments_once()
+    assert sorted(path for path, _ in box.uploads) == [
+        "/Volumes/ONE/a.mov",
+        "/Volumes/TWO/b.mov",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_finished_transcode_uploads_while_the_next_runs_but_only_so_many(
+    tmp_path: Path,
+) -> None:
+    box = FakeBox([_volume("a.mov", "b.mov", "c.mov")])
+    first = box.hold["/w/job/a_HQ.mp4"] = asyncio.Event()
+    second = box.hold["/w/job/b_HQ.mp4"] = asyncio.Event()
+    ingest, slack = _setup(tmp_path, box, _transcode_config(tmp_path))
+    await ingest.scan_once()
+    slack.replies = _ask()
+
+    await ingest.poll_comments()
+    await _until(lambda: len(box.transcodes) == 2)
+    await _let_others_run()
+    assert len(box.transcodes) == 2
+    assert box.uploads == []
+
+    first.set()
+    await _until(lambda: len(box.transcodes) == 3)
+    second.set()
+    await ingest.check_comments_once()
+    assert sorted(path for path, _ in box.uploads) == [
+        "/w/job/a_HQ.mp4",
+        "/w/job/b_HQ.mp4",
+        "/w/job/c_HQ.mp4",
+    ]
+    assert slack.status_updates[-1] == "Uploaded 3 of 3 to Studio."
+
+
+@pytest.mark.asyncio
+async def test_a_closed_link_stops_the_videos_still_waiting(tmp_path: Path) -> None:
+    box = FakeBox([_volume("a.mov", "b.mov", "c.mov")])
+    box.upload_errors["/Volumes/CARD/a.mov"] = UploadFailed(
+        "Link closed", link_closed=True
+    )
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    slack.replies = _ask()
+
+    await ingest.check_comments_once()
+
+    assert box.resumed == [None]
+    assert slack.status_updates[-1] == (
+        "Uploaded 0 of 3 to Studio.\nNot uploaded:\n- #1: Link closed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_failures_are_reported_in_order_and_the_rest_still_upload(
+    tmp_path: Path,
+) -> None:
+    box = FakeBox([_volume("a.mov", "b.mov", "c.mov")])
+    box.upload_errors["/Volumes/CARD/a.mov"] = UploadFailed("One")
+    box.upload_errors["/Volumes/CARD/c.mov"] = UploadFailed("Three")
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    slack.replies = _ask()
+
+    await ingest.check_comments_once()
+
+    assert box.uploads == [("/Volumes/CARD/b.mov", LINK)]
+    assert slack.status_updates[-1] == (
+        "Uploaded 1 of 3 to Studio.\nNot uploaded:\n- #1: One\n- #3: Three"
+    )
+
+
+@pytest.mark.asyncio
+async def test_losing_the_box_stops_the_reply_and_says_why(tmp_path: Path) -> None:
+    box = FakeBox([_volume("a.mov", "b.mov")])
+
+    async def lost(path: str, link: str) -> None:
+        raise ConnectionResetError("gone")
+
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    box.upload = lost  # type: ignore[method-assign]
+    slack.replies = _ask()
+
+    await ingest.check_comments_once()
+
+    assert "couldn't be reached (ConnectionResetError)" in slack.status_updates[-1]
+    assert ingest.state.batches[0].videos[0].uploaded_to == []
+
+
+@pytest.mark.asyncio
+async def test_a_reaction_slack_refuses_never_stops_anything() -> None:
+    client = SlackClient(bot_token="x", app_token="y", channel_id="C1")
+    for error in ("already_reacted", "missing_scope"):
+        refusal = SlackApiError("no", cast(object, {"error": error}))
+        client._web = cast(
+            AsyncWebClient,
+            SimpleNamespace(reactions_add=AsyncMock(side_effect=refusal)),
+        )
+        await client.add_reaction(SlackMessage(tid="1.0"), "eyes")

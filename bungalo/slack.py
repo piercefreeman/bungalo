@@ -144,6 +144,18 @@ class SlackClient:
         except SlackApiError as e:
             LOGGER.error(f"Failed to delete Slack message: {e}")
 
+    async def add_reaction(self, message: SlackMessage, emoji: str) -> None:
+        """React to a message. Requires `reactions:write`; a failure is only logged."""
+        try:
+            await self._web.reactions_add(
+                channel=await self._get_channel_id(),
+                timestamp=message.tid,
+                name=emoji,
+            )
+        except SlackApiError as e:
+            if e.response["error"] != "already_reacted":
+                LOGGER.error(f"Failed to react to Slack message: {e}")
+
     async def upload_file(
         self,
         parent: SlackMessage,

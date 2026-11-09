@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -380,7 +381,9 @@ async def test_transcode_passes_paths_safely_and_cleans_up() -> None:
     """Regression guard: ffmpeg must not be able to read the session's stdin."""
     connection = ScriptedConnection(FakeResult(stdout=b"/w/.job\n"))
     box = Box(connection)
-    async with box.transcoded("/Volumes/CARD/it's.mov", "a.mp4", TEMPLATE, "/w") as out:
+    async with box.transcoded(
+        "/Volumes/CARD/it's.mov", "a.mp4", TEMPLATE, "/w", gate=nullcontext()
+    ) as out:
         assert out == "/w/.job/a.mp4"
 
     make, run, check, remove = connection.commands
@@ -402,7 +405,9 @@ async def test_failed_transcode_reports_the_error_and_cleans_up() -> None:
         FakeResult(stdout=b"/w/.job\n"), FakeResult(exit_status=1, stderr=stderr)
     )
     with pytest.raises(UploadFailed, match="No such encoder") as failed:
-        async with Box(connection).transcoded("/a.mov", "a.mp4", TEMPLATE, "/w"):
+        async with Box(connection).transcoded(
+            "/a.mov", "a.mp4", TEMPLATE, "/w", gate=nullcontext()
+        ):
             pytest.fail("should not yield")
     assert "progress=" not in failed.value.reason
     assert connection.commands[-1] == "rm -rf /w/.job"
@@ -414,7 +419,9 @@ async def test_transcode_that_writes_nothing_is_a_failure() -> None:
         FakeResult(stdout=b"/w/.job\n"), FakeResult(), FakeResult(exit_status=1)
     )
     with pytest.raises(UploadFailed, match="without writing"):
-        async with Box(connection).transcoded("/a.mov", "a.mp4", TEMPLATE, "/w"):
+        async with Box(connection).transcoded(
+            "/a.mov", "a.mp4", TEMPLATE, "/w", gate=nullcontext()
+        ):
             pytest.fail("should not yield")
 
 
@@ -485,6 +492,8 @@ async def test_failed_cleanup_is_logged_without_replacing_the_result(
     connection: Any,
 ) -> None:
     with patch("bungalo.media_ingest.box.LOGGER") as logger:
-        async with Box(connection).transcoded("/a.mov", "a.mp4", TEMPLATE, "/w"):
+        async with Box(connection).transcoded(
+            "/a.mov", "a.mp4", TEMPLATE, "/w", gate=nullcontext()
+        ):
             pass
     logger.warning.assert_called_once()

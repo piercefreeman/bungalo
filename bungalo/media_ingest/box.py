@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any, AsyncContextManager, Literal
 from urllib.parse import quote
 
 import asyncssh
@@ -281,16 +281,23 @@ class Box:
 
     @asynccontextmanager
     async def transcoded(
-        self, source: str, output_name: str, template: str, work_dir: str
+        self,
+        source: str,
+        output_name: str,
+        template: str,
+        work_dir: str,
+        gate: AsyncContextManager[None],
     ) -> AsyncIterator[str]:
         """
         Run a transcode template on the box, yielding the path of its output.
-        The output is deleted on leaving the context, whatever happened.
+        Only the transcode itself runs inside `gate`. The output is deleted on
+        leaving the context, whatever happened.
         """
         work = await self._make_work_dir(work_dir)
         try:
             output = f"{work}/{output_name}"
-            await self._run_template(source, output, template)
+            async with gate:
+                await self._run_template(source, output, template)
             yield output
         finally:
             await self._remove_work_dir(work)
