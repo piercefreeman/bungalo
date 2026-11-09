@@ -562,6 +562,38 @@ async def test_a_running_transcode_reports_what_it_writes(
 
 
 @pytest.mark.asyncio
+async def test_progress_continues_without_a_length_when_the_probe_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a box without ffprobe silently lost all transcode progress."""
+    monkeypatch.setattr(box_module, "PROGRESS_SECONDS", 0.01)
+    template = (
+        "printf 'out_time_us=5000000\\nprogress=continue\\n' > \"$PROGRESS\"\n"
+        'sleep 0.3\necho done > "$OUTPUT"\n'
+    )
+    seen: list[TranscodeProgress] = []
+
+    async def report(progress: TranscodeProgress) -> None:
+        seen.append(progress)
+
+    async def no_probe(path: str) -> float | None:
+        raise BoxCommandError("ffprobe is not installed on the box")
+
+    box = Box(AsyncLocalConnection())
+    monkeypatch.setattr(box, "_duration", no_probe)
+    async with box.transcoded(
+        "/no/such.mov",
+        "a.mp4",
+        template,
+        str(tmp_path),
+        gate=nullcontext(),
+        on_progress=report,
+    ):
+        assert seen
+    assert seen[0] == TranscodeProgress(5.0, None, None)
+
+
+@pytest.mark.asyncio
 async def test_upload_reports_each_part_and_counts_what_studio_already_had() -> None:
     reports: list[tuple[int, int]] = []
 

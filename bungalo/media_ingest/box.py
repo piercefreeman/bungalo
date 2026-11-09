@@ -536,7 +536,12 @@ class Box:
         self, source: str, path: str, report: TranscodeReporter
     ) -> None:
         """Pass on what ffmpeg writes to the progress file, until cancelled."""
-        duration = await self._duration(source)
+        duration: float | None = None
+        # Without a length it can still say how much has been encoded.
+        try:
+            duration = await self._duration(source)
+        except (BoxCommandError, asyncssh.Error, OSError) as error:
+            LOGGER.warning("Couldn't read the transcode's length: %s", error)
         while True:
             await asyncio.sleep(PROGRESS_SECONDS)
             # Only a progress line is lost if this fails, so never stop the encode.
