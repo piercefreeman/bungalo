@@ -13,6 +13,7 @@ from bungalo.config import BungaloConfig
 from bungalo.constants import DEFAULT_CONFIG_FILE
 from bungalo.dashboard import start_dashboard_services
 from bungalo.io import async_to_sync
+from bungalo.media_ingest.service import run_media_ingest
 from bungalo.nut.cli import main as battery_main
 from bungalo.plugins.home_assistant import main as home_assistant_main
 from bungalo.plugins.jellyfin import main as jellyfin_main
@@ -69,6 +70,8 @@ async def run_all():
         tasks.append(jellyfin_main(config))
     if config.home_assistant.enabled:
         tasks.append(home_assistant_main(config))
+    if config.media_ingest:
+        tasks.append(run_media_ingest(config))
     await asyncio.gather(*tasks)
 
 
@@ -117,6 +120,14 @@ async def home_assistant():
     """Launch the Home Assistant container."""
     config = get_config()
     await home_assistant_main(config)
+
+
+@cli.command()
+@async_to_sync
+async def media_ingest():
+    """Offer new footage on a remote Mac's volumes for upload through Slack."""
+    config = get_config()
+    await run_media_ingest(config)
 
 
 def get_config():

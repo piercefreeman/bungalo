@@ -8,6 +8,8 @@ from bungalo.config import BungaloConfig
 from bungalo.config.config import (
     EndpointConfig,
     ManagedHardware,
+    MediaIngestConfig,
+    MediaIngestTranscodeConfig,
     MediaServerConfig,
     MediaServerMount,
     NutConfig,
@@ -328,3 +330,43 @@ def test_secret_values(config_dict: dict[str, Any]) -> None:
     # Check NAS credentials
     assert isinstance(config.endpoints.nas[0].password, SecretStr)
     assert isinstance(config.endpoints.nas[1].password, SecretStr)
+
+
+STUDIO = "https://studio.example.com"
+
+
+def test_config_requires_an_origin_for_studio() -> None:
+    assert (
+        MediaIngestConfig(
+            ssh_endpoint="m", studio_url=f"{STUDIO}/", volumes=["CARD"]
+        ).studio_url
+        == STUDIO
+    )
+    with pytest.raises(ValidationError):
+        MediaIngestConfig(
+            ssh_endpoint="m", studio_url="studio.example.com", volumes=["CARD"]
+        )
+    with pytest.raises(ValidationError):
+        MediaIngestConfig(
+            ssh_endpoint="m", studio_url=f"{STUDIO}/app", volumes=["CARD"]
+        )
+
+
+@pytest.mark.parametrize("volumes", [[], ["a/b"], [" "], [".."], ["a\tb"]])
+def test_config_requires_valid_volume_names(volumes: list[str]) -> None:
+    with pytest.raises(ValidationError):
+        MediaIngestConfig(ssh_endpoint="m", studio_url=STUDIO, volumes=volumes)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"output_suffix": "mp4"},
+        {"output_suffix": "a/b.mp4"},
+        {"output_suffix": ".mp4", "work_dir": "relative"},
+        {"output_suffix": ".mp4", "work_dir": "/"},
+    ],
+)
+def test_transcode_config_is_validated(fields: dict[str, str]) -> None:
+    with pytest.raises(ValidationError):
+        MediaIngestTranscodeConfig.model_validate({"template": "/t.sh", **fields})

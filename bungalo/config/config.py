@@ -1,5 +1,7 @@
+import re
 from datetime import timedelta
 from typing import Literal, Sequence
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -96,6 +98,74 @@ class HomeAssistantConfig(BaseSettings):
     port: int = 8123
 
 
+class MediaIngestTranscodeConfig(BaseModel):
+    template: str
+    """Path on the Bungalo server to a shell script using "$INPUT" and "$OUTPUT"."""
+
+    output_suffix: str
+    """Replaces the source's extension to name the output, like "_HQ.mp4"."""
+
+    work_dir: str = "/tmp/bungalo-media-ingest"
+    """Folder on the box for output while it waits to upload."""
+
+    @field_validator("output_suffix")
+    @classmethod
+    def validate_output_suffix(cls, value: str) -> str:
+        if not re.fullmatch(r"[^/\r\n]*\.[A-Za-z0-9]+", value):
+            raise ValueError("output_suffix must end in an extension, like _HQ.mp4")
+        return value
+
+    @field_validator("work_dir")
+    @classmethod
+    def validate_work_dir(cls, value: str) -> str:
+        if not value.startswith("/") or value.rstrip("/") == "":
+            raise ValueError("work_dir must be an absolute folder below /")
+        return value.rstrip("/")
+
+
+class MediaIngestConfig(BaseModel):
+    ssh_endpoint: str
+    """Nickname of the [[endpoints.sftp]] entry for the Mac holding the footage."""
+
+    studio_url: str
+    """Origin of the Studio that upload links in Slack comments must belong to."""
+
+    volumes: list[str] = Field(min_length=1)
+    """Volume names to scan, like "CARD", however macOS suffixes their mount points."""
+
+    interval: timedelta = Field(default=timedelta(minutes=5), gt=timedelta(0))
+    """How often to SSH in and look through /Volumes for new videos."""
+
+    reply_interval: timedelta = Field(default=timedelta(seconds=30), gt=timedelta(0))
+    """How often to check open contact sheet threads for comments."""
+
+    transcode: MediaIngestTranscodeConfig | None = None
+    """Convert each selected video on the box before uploading it."""
+
+    @field_validator("volumes")
+    @classmethod
+    def validate_volume_names(cls, value: list[str]) -> list[str]:
+        for name in value:
+            if (
+                not name.strip()
+                or name in (".", "..")
+                or any(character in name for character in "/\t\r\n")
+            ):
+                raise ValueError(f"'{name}' is not a volume name under /Volumes")
+        return value
+
+    @field_validator("studio_url")
+    @classmethod
+    def validate_studio_url(cls, value: str) -> str:
+        value = value.rstrip("/")
+        parts = urlsplit(value)
+        if parts.scheme not in ("http", "https") or not parts.netloc or parts.path:
+            raise ValueError(
+                "studio_url must be an origin, like https://studio.example.com"
+            )
+        return value
+
+
 class EndpointConfig(BaseSettings):
     b2: list[B2Endpoint] = []
     nas: list[NASEndpoint] = []
@@ -153,6 +223,21 @@ class BungaloConfig(BaseSettings):
 
     # Home automation
     home_assistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
+
+    # Footage on a remote Mac, offered for upload through Slack
+    media_ingest: MediaIngestConfig | None = None
+
+    @model_validator(mode="after")
+    def _validate_media_ingest_endpoint(self):
+        if self.media_ingest and not any(
+            endpoint.nickname == self.media_ingest.ssh_endpoint
+            for endpoint in self.endpoints.sftp
+        ):
+            raise ValueError(
+                f"media_ingest.ssh_endpoint '{self.media_ingest.ssh_endpoint}' "
+                "does not match any configured SFTP endpoint nickname"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_file_locations(self):

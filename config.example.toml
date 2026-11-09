@@ -68,3 +68,19 @@ self_ip = "100.64.0.10"
 [home_assistant]
   enabled = true
   # port = 8123  # default Home Assistant port
+
+# Optional: offer new videos on a Mac's /Volumes for upload to Studio via Slack.
+# ssh_endpoint names an [[endpoints.sftp]] entry for that Mac.
+# [media_ingest]
+#   ssh_endpoint = "edit-mac"
+#   studio_url = "https://studio.example.com"
+#   volumes = ["CARD", "EOS_DIGITAL"]  # volume names to scan
+#   interval = "PT5M"         # how often to SSH in and check /Volumes
+#   reply_interval = "PT30S"  # how often to check Slack threads for comments
+#
+# Optional: convert each selected video on that Mac before uploading it.
+# The template is a shell script on this server using "$INPUT" and "$OUTPUT".
+# [media_ingest.transcode]
+#   template = "/root/.bungalo/media_ingest/transcode.sh"
+#   output_suffix = "_HQ.mp4"  # C0001.MOV uploads as C0001_HQ.mp4
+#   work_dir = "/tmp/bungalo-media-ingest"  # needs room for the largest output
