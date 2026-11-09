@@ -53,6 +53,11 @@ def _selected_numbers(text: str, video_count: int) -> list[int]:
     return sorted(chosen)
 
 
+def is_delete_confirmation(text: str) -> bool:
+    """Whether a comment is exactly `DELETE`, the only reply that removes footage."""
+    return text.strip() == "DELETE"
+
+
 def parse_comment(
     text: str, *, studio_url: str, video_count: int
 ) -> UploadRequest | None:

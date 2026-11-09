@@ -1,6 +1,10 @@
 import pytest
 
-from bungalo.media_ingest.comments import CommentError, parse_comment
+from bungalo.media_ingest.comments import (
+    CommentError,
+    is_delete_confirmation,
+    parse_comment,
+)
 
 STUDIO = "https://studio.example.com"
 
@@ -61,3 +65,18 @@ def test_two_different_links_are_refused() -> None:
 def test_out_of_range_selection_is_refused() -> None:
     with pytest.raises(CommentError, match="numbered 1 to 3"):
         parse(f"2-9 <{LINK}>", count=3)
+
+
+@pytest.mark.parametrize(
+    ("text", "confirmed"),
+    [
+        ("DELETE", True),
+        ("  DELETE\n", True),
+        ("delete", False),
+        ("Delete", False),
+        ("DELETE 1", False),
+        ("please DELETE these", False),
+    ],
+)
+def test_only_an_exact_delete_confirms(text: str, confirmed: bool) -> None:
+    assert is_delete_confirmation(text) is confirmed

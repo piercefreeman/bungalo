@@ -47,6 +47,8 @@ _READ_FAILED = 125
 
 StudioMethod = Literal["GET", "POST", "DELETE"]
 
+_UUID_PREFIX = "uuid:"
+
 # Non-interactive SSH sessions on macOS don't include Homebrew in PATH.
 _PATH_SETUP = "export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; "
 
@@ -153,6 +155,11 @@ class UploadFailed(RuntimeError):
         self.link_closed = link_closed
 
 
+def has_stable_id(volume_id: str) -> bool:
+    """Whether a volume is known by its UUID, not just the name it's mounted under."""
+    return volume_id.startswith(_UUID_PREFIX)
+
+
 def parse_scan(output: str) -> list[Volume]:
     """Read the scan script's output: a V line per volume, then its F lines."""
     volumes: list[Volume] = []
@@ -163,7 +170,7 @@ def parse_scan(output: str) -> list[Volume]:
                 continue
             _, uuid, name, mount_point = parts
             mounted = PurePosixPath(mount_point).name
-            volume_id = f"uuid:{uuid}" if uuid else f"name:{mounted}"
+            volume_id = f"{_UUID_PREFIX}{uuid}" if uuid else f"name:{mounted}"
             volumes.append(Volume(id=volume_id, name=name, mount_point=mount_point))
         elif line.startswith("F\t") and volumes:
             parts = line.split("\t", 3)
@@ -287,6 +294,35 @@ class Box:
             yield output
         finally:
             await self._remove_work_dir(work)
+
+    async def delete(self, volume: Volume, video: VideoFile) -> None:
+        """
+        Permanently remove a video, checking on the box in the same command that
+        the disk and the file are still the ones expected.
+
+        :raises BoxCommandError: if they aren't, or it couldn't be removed
+        """
+        if not has_stable_id(volume.id):
+            raise BoxCommandError("This volume can't be identified reliably")
+        mount = shlex.quote(volume.mount_point)
+        path = shlex.quote(volume.path_of(video))
+        expected_uuid = shlex.quote(volume.id.removeprefix(_UUID_PREFIX))
+        script = (
+            f"uuid=$(diskutil info {mount} 2>/dev/null "
+            "| sed -n 's/^ *Volume UUID: *//p' | head -n 1)\n"
+            f'[ "$uuid" = {expected_uuid} ] '
+            '|| { echo "A different disk is mounted there now" >&2; exit 1; }\n'
+            f'[ "$(stat -f "%z %m" {path})" = "{video.size} {video.mtime}" ] '
+            '|| { echo "The file changed after it was checked" >&2; exit 1; }\n'
+            f"rm -- {path}\n"
+        )
+        result = await self.connection.run(
+            f"/bin/sh -c {shlex.quote(script)}", encoding=None, check=False
+        )
+        if result.exit_status != 0:
+            raise BoxCommandError(
+                _decode(result.stderr).strip() or f"rm exited with {result.exit_status}"
+            )
 
     async def _file_version(self, path: str) -> tuple[int, int]:
         """A file's size and modification time."""

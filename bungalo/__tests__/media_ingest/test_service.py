@@ -12,6 +12,7 @@ from PIL import Image
 from bungalo.config.config import MediaIngestConfig, MediaIngestTranscodeConfig
 from bungalo.media_ingest.box import (
     Box,
+    BoxCommandError,
     ScanResult,
     StudioUpload,
     UploadFailed,
@@ -45,6 +46,8 @@ class FakeBox:
         self.transcodes: list[tuple[str, str, str, str]] = []
         self.transcode_error: UploadFailed | None = None
         self.resumed: list[UploadSessionID | None] = []
+        self.deleted: list[str] = []
+        self.delete_errors: dict[str, BoxCommandError] = {}
 
     async def scan(self, ignored: list[str]) -> ScanResult:
         return ScanResult(self.volumes)
@@ -63,6 +66,12 @@ class FakeBox:
         if path in self.upload_errors:
             raise self.upload_errors[path]
         self.uploads.append((path, link))
+
+    async def delete(self, volume: Volume, video: VideoFile) -> None:
+        path = volume.path_of(video)
+        if path in self.delete_errors:
+            raise self.delete_errors[path]
+        self.deleted.append(path)
 
     async def open_upload(
         self, path: str, link: str, resume_id: UploadSessionID | None = None
@@ -250,6 +259,11 @@ async def test_expiry_reads_final_comments_then_reoffers_unsent(
     await ingest.check_comments_once()
 
     assert box.uploads == [("/Volumes/CARD/a.mp4", LINK)]
+    # It stays open for the delete list that upload just posted, then closes.
+    batch = ingest.state.batches[0]
+    assert batch.delete_offer is not None
+    batch.delete_offer.offered_at -= timedelta(days=30)
+    await ingest.check_comments_once()
     assert ingest.state.batches == []
     assert "has closed" in slack.posts[-1][0]
 
@@ -402,3 +416,252 @@ async def test_a_transcoded_upload_is_never_resumed(tmp_path: Path) -> None:
     assert box.uploads == [("/w/job/a_HQ.mp4", LINK)]
     assert box.resumed == []
     assert ingest.state.batches[0].videos[0].upload_ids == {}
+
+
+THREAD = SlackMessage(tid="100.000001")
+
+
+async def _uploaded(
+    tmp_path: Path, *names: str, select: str = "all"
+) -> tuple[FakeBox, MediaIngest, FakeSlack]:
+    """A thread whose videos were announced and then uploaded."""
+    box = FakeBox([_volume(*names)])
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"{select} {LINK}"}]
+    await ingest.check_comments_once()
+    return box, ingest, slack
+
+
+def _reply(slack: FakeSlack, ts: str, text: str = "DELETE") -> None:
+    slack.replies.append({"ts": ts, "user": "U", "text": text})
+
+
+@pytest.mark.asyncio
+async def test_uploads_are_offered_for_deletion_in_the_thread(tmp_path: Path) -> None:
+    box, ingest, slack = await _uploaded(tmp_path, "a.mp4", "b.mp4", select="1")
+    prompt, parent = slack.posts[-1]
+    assert parent == THREAD
+    assert "`DELETE`" in prompt and "a.mp4" in prompt and "b.mp4" not in prompt
+    assert box.deleted == []
+    offer = ingest.state.batches[0].delete_offer
+    assert offer is not None and offer.numbers == [1]
+
+
+@pytest.mark.asyncio
+async def test_delete_reply_removes_the_uploaded_files(tmp_path: Path) -> None:
+    box, ingest, slack = await _uploaded(tmp_path, "a.mp4", "b.mp4", select="1")
+    _reply(slack, "300.0")
+    await ingest.check_comments_once()
+    assert box.deleted == ["/Volumes/CARD/a.mp4"]
+    batch = ingest.state.batches[0]
+    assert batch.videos[0].deleted and not batch.videos[1].deleted
+    assert batch.delete_offer is None
+    assert "Deleted 1" in slack.status_updates[-1]
+    assert all(parent == THREAD for _, parent in slack.posts[1:])
+
+    _reply(slack, "301.0")
+    await ingest.check_comments_once()
+    assert box.deleted == ["/Volumes/CARD/a.mp4"]
+    assert "Nothing was deleted" in slack.posts[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_each_new_upload_lists_everything_still_on_the_disk(
+    tmp_path: Path,
+) -> None:
+    box, ingest, slack = await _uploaded(tmp_path, "a.mp4", "b.mp4", select="1")
+    _reply(slack, "300.0", f"2 {LINK}")
+    await ingest.check_comments_once()
+    assert "a.mp4" in slack.posts[-1][0] and "b.mp4" in slack.posts[-1][0]
+    _reply(slack, "301.0")
+    await ingest.check_comments_once()
+    assert len(box.deleted) == 2
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_offered_when_no_upload_succeeds(tmp_path: Path) -> None:
+    box = FakeBox([_volume("a.mp4")])
+    box.upload_errors["/Volumes/CARD/a.mp4"] = UploadFailed("Nope")
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+    assert ingest.state.batches[0].delete_offer is None
+    assert not any("`DELETE`" in text for text, _ in slack.posts)
+
+    _reply(slack, "300.0")
+    await ingest.check_comments_once()
+    assert box.deleted == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["delete", "DELETE 1", "ok DELETE"])
+async def test_anything_but_an_exact_delete_removes_nothing(
+    tmp_path: Path, text: str
+) -> None:
+    box, ingest, slack = await _uploaded(tmp_path, "a.mp4")
+    _reply(slack, "300.0", text)
+    await ingest.check_comments_once()
+    assert box.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_delete_from_before_the_latest_list_removes_nothing(
+    tmp_path: Path,
+) -> None:
+    box, ingest, slack = await _uploaded(tmp_path, "a.mp4")
+    offer = ingest.state.batches[0].delete_offer
+    assert offer is not None
+    offer.prompt_ts = "500.0"
+    _reply(slack, "300.0")
+    await ingest.check_comments_once()
+    assert box.deleted == []
+    assert ingest.state.batches[0].delete_offer is not None
+
+
+@pytest.mark.asyncio
+async def test_a_changed_file_is_never_deleted(tmp_path: Path) -> None:
+    box, ingest, slack = await _uploaded(tmp_path, "a.mp4", "b.mp4")
+    box.volumes[0].files[0] = VideoFile("a.mp4", 1000, 99)
+    _reply(slack, "300.0")
+    await ingest.check_comments_once()
+    assert box.deleted == ["/Volumes/CARD/b.mp4"]
+    assert "#1: changed or removed" in slack.status_updates[-1]
+    assert not ingest.state.batches[0].videos[0].deleted
+
+
+@pytest.mark.asyncio
+async def test_a_different_disk_is_never_deleted_from(tmp_path: Path) -> None:
+    box, ingest, slack = await _uploaded(tmp_path, "a.mp4")
+    box.volumes[0].id = "uuid:other"
+    _reply(slack, "300.0")
+    await ingest.check_comments_once()
+    assert box.deleted == []
+    assert "isn't mounted" in slack.status_updates[-1]
+    assert ingest.state.batches[0].delete_offer is not None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_delete_can_be_confirmed_again(tmp_path: Path) -> None:
+    box, ingest, slack = await _uploaded(tmp_path, "a.mp4", "b.mp4")
+    box.delete_errors["/Volumes/CARD/a.mp4"] = BoxCommandError("Read-only file system")
+    _reply(slack, "300.0")
+    await ingest.check_comments_once()
+    assert box.deleted == ["/Volumes/CARD/b.mp4"]
+    assert "Read-only file system" in slack.status_updates[-1]
+
+    box.delete_errors.clear()
+    _reply(slack, "301.0")
+    await ingest.check_comments_once()
+    assert box.deleted == ["/Volumes/CARD/b.mp4", "/Volumes/CARD/a.mp4"]
+    assert ingest.state.batches[0].delete_offer is None
+
+
+@pytest.mark.asyncio
+async def test_transcoded_uploads_warn_that_originals_are_not_on_studio(
+    tmp_path: Path,
+) -> None:
+    template = tmp_path / "t.sh"
+    template.write_text(TEMPLATE)
+    transcode = MediaIngestTranscodeConfig(
+        template=str(template), output_suffix="_HQ.mp4", work_dir="/w"
+    )
+    ingest, slack = _setup(tmp_path, FakeBox([_volume("a.mp4")]), transcode)
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+    assert "not these originals" in slack.posts[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_a_volume_without_a_disk_id_is_not_offered_for_deletion(
+    tmp_path: Path,
+) -> None:
+    volume = _volume("a.mp4")
+    volume.id = "name:CARD"
+    box = FakeBox([volume])
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+    assert ingest.state.batches[0].delete_offer is None
+    assert "no disk ID" in slack.posts[-1][0]
+
+    _reply(slack, "300.0")
+    await ingest.check_comments_once()
+    assert box.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_a_long_list_is_shown_in_full_before_it_can_be_confirmed(
+    tmp_path: Path,
+) -> None:
+    names = [f"{'long/' * 40}{index:04}.mp4" for index in range(300)]
+    box, ingest, slack = await _uploaded(tmp_path, *names)
+    pages = [text for text, _ in slack.posts if "- #" in text]
+    assert len(pages) > 1 and all(len(page) <= 8000 for page in pages)
+    assert all(name in "".join(pages) for name in names)
+    assert "`DELETE`" in pages[-1]
+    offer = ingest.state.batches[0].delete_offer
+    assert offer is not None and offer.prompt_ts == slack_tid(slack, pages[-1])
+
+
+def slack_tid(slack: FakeSlack, text: str) -> str:
+    index = next(i for i, (posted, _) in enumerate(slack.posts) if posted == text)
+    return f"100.{index + 1:06}"
+
+
+@pytest.mark.asyncio
+async def test_an_offer_that_could_not_be_posted_is_retried(tmp_path: Path) -> None:
+    box = FakeBox([_volume("a.mp4")])
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    post = slack.create_status
+
+    async def failing(text: str, parent_ts: SlackMessage | None = None) -> SlackMessage:
+        if "`DELETE`" in text:
+            return SlackMessage(tid="error", command_errored=True)
+        return await post(text, parent_ts)
+
+    slack.create_status = failing  # type: ignore[method-assign]
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+    batch = ingest.state.batches[0]
+    assert batch.delete_offer is None and batch.delete_offer_due
+
+    slack.create_status = post  # type: ignore[method-assign]
+    await ingest.check_comments_once()
+    assert batch.delete_offer is not None and not batch.delete_offer_due
+
+
+@pytest.mark.asyncio
+async def test_a_crash_before_the_offer_still_asks_after_restart(
+    tmp_path: Path,
+) -> None:
+    box, ingest, _ = await _uploaded(tmp_path, "a.mp4")
+    batch = ingest.state.batches[0]
+    batch.delete_offer, batch.delete_offer_due = None, True
+    ingest.store.save(ingest.state)
+
+    restarted, slack = _setup(tmp_path, box)
+    await restarted.check_comments_once()
+    assert restarted.state.batches[0].delete_offer is not None
+    assert "`DELETE`" in slack.posts[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_a_list_posted_at_expiry_can_still_be_answered(tmp_path: Path) -> None:
+    box = FakeBox([_volume("a.mp4")])
+    ingest, slack = _setup(tmp_path, box)
+    await ingest.scan_once()
+    batch = ingest.state.batches[0]
+    batch.created_at = batch.created_at - timedelta(days=30)
+    slack.replies = [{"ts": "200.0", "user": "U", "text": f"1 {LINK}"}]
+    await ingest.check_comments_once()
+    assert ingest.state.batches == [batch] and batch.delete_offer is not None
+
+    _reply(slack, "300.0")
+    await ingest.check_comments_once()
+    assert box.deleted == ["/Volumes/CARD/a.mp4"]
+    assert ingest.state.batches == []

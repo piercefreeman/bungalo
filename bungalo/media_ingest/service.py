@@ -1,12 +1,14 @@
 """
 Announces new footage on a remote Mac's volumes in Slack, and uploads whatever
-people pick by commenting on the contact sheet. Comments are polled rather than
-streamed so none are lost to a restart or a long upload.
+people pick by commenting on the contact sheet, then offers to remove what was
+uploaded from the volume. Comments are polled rather than streamed so none are
+lost to a restart or a long upload.
 """
 
 import asyncio
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import AsyncContextManager
 
@@ -17,14 +19,21 @@ from bungalo.constants import DEFAULT_MEDIA_INGEST_STATE_FILE
 from bungalo.logger import CONSOLE, LOGGER
 from bungalo.media_ingest.box import (
     Box,
+    BoxCommandError,
     ScanResult,
     UploadFailed,
     VideoFile,
     Volume,
     connect_box,
+    has_stable_id,
     read_transcode_template,
 )
-from bungalo.media_ingest.comments import CommentError, UploadRequest, parse_comment
+from bungalo.media_ingest.comments import (
+    CommentError,
+    UploadRequest,
+    is_delete_confirmation,
+    parse_comment,
+)
 from bungalo.media_ingest.contact_sheet import (
     SheetRow,
     paginate,
@@ -33,6 +42,7 @@ from bungalo.media_ingest.contact_sheet import (
 from bungalo.media_ingest.state import (
     Batch,
     BatchVideo,
+    DeleteOffer,
     IngestState,
     StateStore,
     hash_link,
@@ -42,6 +52,8 @@ from bungalo.slack import SlackClient, SlackMessage
 SERVICE_NAME = "media_ingest"
 BATCH_LIFETIME = timedelta(days=14)
 CONCURRENT_VIDEOS = 4
+# Slack quietly truncates long messages, which would hide files from a delete list.
+MAX_MESSAGE_CHARS = 8000
 
 
 def format_size(size: float) -> str:
@@ -100,12 +112,18 @@ class MediaIngest:
                 parent, after_ts=batch.last_reply_ts
             )
             for reply in replies:
-                await self._handle_comment(batch, parent, reply.get("text", ""))
+                await self._handle_comment(
+                    batch, parent, reply.get("text", ""), reply["ts"]
+                )
                 # Only after handling: a crash replays the comment, and files
                 # confirmed at this link are skipped.
                 batch.last_reply_ts = reply["ts"]
                 self.store.save(self.state)
-            if batch.created_at < cutoff:
+            if batch.delete_offer_due:
+                await self._offer_delete(batch, parent)
+            # A list that was just posted still gets its full time to be answered.
+            offered_at = batch.delete_offer and batch.delete_offer.offered_at
+            if max(batch.created_at, offered_at or batch.created_at) < cutoff:
                 await self._close(batch, parent)
 
     async def _close(self, batch: Batch, parent: SlackMessage) -> None:
@@ -201,8 +219,11 @@ class MediaIngest:
         )
 
     async def _handle_comment(
-        self, batch: Batch, parent: SlackMessage, text: str
+        self, batch: Batch, parent: SlackMessage, text: str, ts: str
     ) -> None:
+        if is_delete_confirmation(text):
+            await self._confirm_delete(batch, parent, ts)
+            return
         try:
             request = parse_comment(
                 text,
@@ -239,6 +260,127 @@ class MediaIngest:
                 "stopped; videos confirmed by Studio won't be sent again."
             )
         await self.slack.update_status(status, summary)
+
+    async def _offer_delete(self, batch: Batch, parent: SlackMessage) -> None:
+        """Ask whether to remove everything in this thread that has been uploaded."""
+        videos = _offerable(batch)
+        if not has_stable_id(batch.volume_id):
+            posted = await self.slack.create_status(
+                f"`{batch.volume_name}` has no disk ID to confirm it's the same "
+                "volume later, so Bungalo won't offer to delete from it.",
+                parent_ts=parent,
+            )
+            if not posted.command_errored:
+                batch.delete_offer_due = False
+                self.store.save(self.state)
+            return
+        if not videos:
+            batch.delete_offer_due = False
+            self.store.save(self.state)
+            return
+
+        count = f"{len(videos)} uploaded video{'' if len(videos) == 1 else 's'}"
+        copies = (
+            " Studio has the transcoded versions, not these originals."
+            if self.settings.transcode
+            else ""
+        )
+        pages = _pages(
+            [
+                f"Reply `DELETE` to permanently remove {count} from "
+                f"`{batch.volume_name}`:",
+                *(
+                    f"- #{v.number} `{v.relative_path}` ({format_size(v.size)})"
+                    for v in videos
+                ),
+                f"This can't be undone.{copies} Without a `DELETE` reply after "
+                "this message they stay on the disk.",
+            ]
+        )
+        # The offer only exists once every file on it has been shown.
+        posted_pages: list[SlackMessage] = []
+        for page in pages:
+            posted = await self.slack.create_status(page, parent_ts=parent)
+            if posted.command_errored:
+                return
+            posted_pages.append(posted)
+        batch.delete_offer = DeleteOffer(
+            prompt_ts=posted_pages[-1].tid,
+            numbers=[v.number for v in videos],
+            offered_at=datetime.now(timezone.utc),
+        )
+        batch.delete_offer_due = False
+        self.store.save(self.state)
+
+    async def _confirm_delete(
+        self, batch: Batch, parent: SlackMessage, ts: str
+    ) -> None:
+        offer = batch.delete_offer
+        # A reply from before the latest list hasn't seen what's on it.
+        if offer is None or Decimal(ts) <= Decimal(offer.prompt_ts):
+            await self.slack.create_status(
+                "Nothing was deleted. `DELETE` only applies to the latest list of "
+                "uploaded videos in this thread, as a reply posted after it.",
+                parent_ts=parent,
+            )
+            return
+        status = await self.slack.create_status(
+            f"Deleting {len(offer.numbers)} from `{batch.volume_name}`...",
+            parent_ts=parent,
+        )
+        try:
+            summary = await self._delete_offered(batch, offer)
+        except Exception as error:
+            LOGGER.error("Delete request failed: %s", type(error).__name__)
+            summary = (
+                f"Deleting stopped because the box couldn't be reached "
+                f"({type(error).__name__}). Reply `DELETE` to finish."
+            )
+        await self.slack.update_status(status, summary)
+
+    async def _delete_offered(self, batch: Batch, offer: DeleteOffer) -> str:
+        """Remove the offered videos that are still exactly what was uploaded."""
+        async with self.connect() as box:
+            scan = await box.scan(self.settings.volumes)
+            volume = next((v for v in scan.volumes if v.id == batch.volume_id), None)
+            if volume is None:
+                return (
+                    f"`{batch.volume_name}` isn't mounted on the box right now, so "
+                    "nothing was deleted. Reply `DELETE` once it's back."
+                )
+            current = {video.relative_path: video for video in volume.files}
+            deleted = 0
+            retry: list[int] = []
+            problems: list[str] = []
+            for video in batch.videos:
+                if video.number not in offer.numbers or video.deleted:
+                    continue
+                file = current.get(video.relative_path)
+                if file is None or file.fingerprint != video.fingerprint:
+                    problems.append(
+                        f"#{video.number}: changed or removed on the disk, left alone"
+                    )
+                    continue
+                try:
+                    await box.delete(volume, file)
+                except BoxCommandError as error:
+                    problems.append(f"#{video.number}: {error}")
+                    retry.append(video.number)
+                    continue
+                video.deleted = True
+                self.store.save(self.state)
+                deleted += 1
+
+        offer.numbers = retry
+        if not retry:
+            batch.delete_offer = None
+        self.store.save(self.state)
+        lines = [f"Deleted {deleted} from `{batch.volume_name}`."]
+        if problems:
+            lines += ["Not deleted:", *(f"- {problem}" for problem in problems)]
+        if retry:
+            lines.append("Reply `DELETE` to try those again.")
+        return "\n".join(lines)
 
     async def _upload(
         self,
@@ -311,6 +453,7 @@ class MediaIngest:
                     continue
                 video.uploaded_to.append(link_hash)
                 video.upload_ids.pop(link_hash, None)
+                batch.delete_offer_due = True
                 self.store.save(self.state)
                 uploaded += 1
 
@@ -318,6 +461,24 @@ class MediaIngest:
         if failures:
             lines += ["Not uploaded:", *(f"- {failure}" for failure in failures)]
         return "\n".join(lines)
+
+
+def _offerable(batch: Batch) -> list[BatchVideo]:
+    """Videos Studio has confirmed that are still on their volume."""
+    return [v for v in batch.videos if v.uploaded_to and not v.deleted]
+
+
+def _pages(lines: list[str]) -> list[str]:
+    """Join lines into as few messages as Slack will show in full."""
+    pages: list[list[str]] = [[]]
+    length = 0
+    for line in lines:
+        if pages[-1] and length + len(line) + 1 > MAX_MESSAGE_CHARS:
+            pages.append([])
+            length = 0
+        pages[-1].append(line)
+        length += len(line) + 1
+    return ["\n".join(page) for page in pages]
 
 
 async def _comment_loop(ingest: MediaIngest, interval: float) -> None:

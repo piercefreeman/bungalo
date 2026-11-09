@@ -25,6 +25,17 @@ class BatchVideo(BaseModel):
     upload_ids: dict[str, UploadSessionID] = Field(default_factory=dict)
     """Studio's id for an unfinished upload of this video, by link hash."""
 
+    deleted: bool = False
+    """Whether someone confirmed removing this video from its volume."""
+
+
+class DeleteOffer(BaseModel):
+    """The list of uploaded videos a `DELETE` reply would currently remove."""
+
+    prompt_ts: str
+    numbers: list[int]
+    offered_at: datetime
+
 
 class Batch(BaseModel):
     """One contact sheet post, open to comments in its Slack thread."""
@@ -35,6 +46,9 @@ class Batch(BaseModel):
     created_at: datetime
     last_reply_ts: str
     videos: list[BatchVideo]
+    delete_offer: DeleteOffer | None = None
+    delete_offer_due: bool = False
+    """Saved with each upload, so a crash can't lose the question that follows it."""
 
 
 class IngestState(BaseModel):

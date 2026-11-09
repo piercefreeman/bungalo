@@ -12,8 +12,10 @@ import pytest
 
 from bungalo.media_ingest.box import (
     Box,
+    BoxCommandError,
     UploadFailed,
     VideoFile,
+    Volume,
     parse_scan,
     read_transcode_template,
     sample_offsets,
@@ -290,6 +292,69 @@ async def test_errors_never_repeat_the_token() -> None:
     with pytest.raises(UploadFailed) as failed:
         await Box(studio).upload(PATH, f"{LINK}/")
     assert TOKEN not in failed.value.reason
+
+
+def _delete_setup(
+    tmp_path: Path, *, uuid: str = "ABC", version: str = "10 5"
+) -> tuple[Box, Volume, VideoFile, Path, Path]:
+    """A real sh and rm, with stand-ins for the macOS-only diskutil and BSD stat."""
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "diskutil").write_text(f"#!/bin/sh\necho '   Volume UUID:   {uuid}'\n")
+    (tools / "stat").write_text(f"#!/bin/sh\necho '{version}'\n")
+    for tool in tools.iterdir():
+        tool.chmod(0o755)
+
+    class Local:
+        async def run(self, command: str, **kwargs: Any) -> FakeResult:
+            path = f"{tools}:{os.environ['PATH']}"
+            done = subprocess.run(
+                ["/bin/sh", "-c", command],
+                capture_output=True,
+                env={**os.environ, "PATH": path},
+            )
+            return FakeResult(done.returncode, done.stdout, done.stderr)
+
+    mount = tmp_path / "CARD"
+    mount.mkdir()
+    target = mount / "it's $HOME *.mov"
+    neighbour = mount / "other.mov"
+    target.write_bytes(b"x")
+    neighbour.write_bytes(b"y")
+    volume = Volume(id="uuid:ABC", name="CARD", mount_point=str(mount))
+    return Box(Local()), volume, VideoFile(target.name, 10, 5), target, neighbour
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_only_the_named_file(tmp_path: Path) -> None:
+    box, volume, video, target, neighbour = _delete_setup(tmp_path)
+    await box.delete(volume, video)
+    assert not target.exists() and neighbour.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_refuses_a_different_disk_at_that_mount(tmp_path: Path) -> None:
+    box, volume, video, target, _ = _delete_setup(tmp_path, uuid="OTHER")
+    with pytest.raises(BoxCommandError, match="different disk"):
+        await box.delete(volume, video)
+    assert target.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_refuses_a_file_that_was_replaced(tmp_path: Path) -> None:
+    box, volume, video, target, _ = _delete_setup(tmp_path, version="10 99")
+    with pytest.raises(BoxCommandError, match="changed"):
+        await box.delete(volume, video)
+    assert target.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_refuses_a_volume_known_only_by_name(tmp_path: Path) -> None:
+    box, volume, video, target, _ = _delete_setup(tmp_path)
+    volume.id = "name:CARD"
+    with pytest.raises(BoxCommandError, match="identified"):
+        await box.delete(volume, video)
+    assert target.exists()
 
 
 def test_parse_scan_keeps_carriage_returns_inside_file_names() -> None:
