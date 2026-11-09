@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, AsyncGenerator, cast
 
 from slack_sdk.errors import SlackApiError
@@ -134,6 +135,63 @@ class SlackClient:
         except SlackApiError as e:
             LOGGER.error(f"Failed to update Slack status message: {e}")
 
+    async def delete_message(self, message: SlackMessage) -> None:
+        """Remove a message this bot posted."""
+        try:
+            await self._web.chat_delete(
+                channel=await self._get_channel_id(), ts=message.tid
+            )
+        except SlackApiError as e:
+            LOGGER.error(f"Failed to delete Slack message: {e}")
+
+    async def upload_file(
+        self,
+        parent: SlackMessage,
+        *,
+        content: bytes,
+        filename: str,
+        title: str,
+    ) -> None:
+        """Attach a file to a thread. Requires `files:write`; raises on failure."""
+        await self._web.files_upload_v2(
+            channel=await self._get_channel_id(),
+            thread_ts=parent.tid,
+            file=content,
+            filename=filename,
+            title=title,
+        )
+
+    async def list_thread_replies(
+        self, parent: SlackMessage, *, after_ts: str
+    ) -> list[dict[str, Any]]:
+        """
+        People's replies in a thread newer than `after_ts`, oldest first. Reads
+        history, so replies made while Bungalo was down are still returned.
+        """
+        channel = await self._get_channel_id()
+        replies: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            response = await self._web.conversations_replies(
+                channel=channel,
+                ts=parent.tid,
+                oldest=after_ts,
+                limit=200,
+                cursor=cursor,
+            )
+            replies += [
+                message
+                for message in response.get("messages") or []
+                if Decimal(message["ts"]) > Decimal(after_ts)
+                and message["ts"] != parent.tid
+                and not message.get("bot_id")
+                and message.get("subtype") in (None, "thread_broadcast")
+            ]
+            metadata = response.get("response_metadata") or {}
+            cursor = metadata.get("next_cursor")
+            if not cursor:
+                return sorted(replies, key=lambda m: Decimal(m["ts"]))
+
     @asynccontextmanager
     async def listen_for_replies(
         self,
@@ -171,7 +229,7 @@ class SlackClient:
                 async def _push(
                     client: SocketModeClient, req: SocketModeRequest
                 ) -> None:
-                    LOGGER.info(f"Received Slack event: {req.type} {req.payload}")
+                    LOGGER.info(f"Received Slack event: {req.type}")
                     if req.type != "events_api":
                         return
                     evt = req.payload.get("event", {})

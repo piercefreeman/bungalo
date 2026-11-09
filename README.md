@@ -124,6 +124,67 @@ Mounts are published to the container as read-only volumes so Jellyfin can index
 
 **Architecture:** Jellyfin runs via Docker-in-Docker (DinD). When the Bungalo container starts, it launches an inner Docker daemon that Jellyfin uses. This allows Jellyfin to access the NAS shares that Bungalo mounts (via SMB/FUSE) inside the container, solving the sibling-container volume mounting problem. The inner Docker daemon uses the `vfs` storage driver for simplicity and runs in privileged mode.
 
+### Footage Ingest
+
+Bungalo can watch the volumes mounted on a Mac and offer new videos for upload to Studio, with Slack as the whole interface. Every `interval`, it connects over SSH and looks through the volumes named in `volumes` for `.mp4`, `.mov`, `.mkv`, `.webm`, `.m4v`, `.avi`, and `.mxf` files it hasn't announced. Only those volumes are read, so anything else mounted on the Mac, like a large network share, is left alone. List volumes by the name you gave them: when two share a name and macOS mounts one at `/Volumes/CARD 1`, `CARD` still matches both, and each is tracked separately. A listed volume that isn't mounted is skipped until it appears. Each volume with new videos gets a Slack post with contact sheets in its thread, showing one numbered band of 5 frames sampled across each video.
+
+To upload, reply in that thread with the numbers and a public upload link from the project's Footage page in Studio:
+
+> 1 3 5-8 https://studio.example.com/public-upload/KEY
+
+Use `all` instead of numbers to send everything. The link's origin must match `studio_url`, and a comment that selects videos without a valid link gets a reply explaining what's needed. Anyone who can post in the channel can request an upload if they have a valid link. A thread takes comments for 14 days. It then closes with a note, and any videos not uploaded are offered again in a new post the next time their volume is scanned.
+
+After a video uploads, Bungalo asks in the same thread whether to remove it from the volume. Reply exactly `DELETE` after the latest list to permanently remove the videos on it. Each file is checked again on the Mac as it's removed, and left alone if it changed or its disk was swapped. Network shares have no disk ID to check, so Bungalo won't offer to delete from them. Only the video files are removed, so sidecar files stay. With a transcode template, Studio has the transcoded version, not the original. Anyone who can post in the channel can confirm a delete.
+
+Frames are extracted on the Mac, and `curl` uploads directly from the Mac to Studio in parts, so video never passes through the Bungalo server. A part that fails is retried, and if an upload stops, even across a Bungalo restart, commenting again with the same link sends only the parts Studio doesn't have. Before each upload Bungalo confirms the same disk is mounted and the file is unchanged. Upload links are never written to its state file or logs, but they do stay visible in the Slack thread until they expire or are revoked in Studio.
+
+```toml
+[[endpoints.sftp]]
+  nickname = "edit-mac"
+  host = "edit-mac.local"
+  username = "footage"
+  key_file = "/root/.bungalo/ssh/edit-mac"
+  known_hosts_file = "/root/.bungalo/ssh/known_hosts"
+
+[media_ingest]
+  ssh_endpoint = "edit-mac"
+  studio_url = "https://studio.example.com"
+  volumes = ["CARD", "EOS_DIGITAL"]
+  interval = "PT5M"
+```
+
+On the Mac:
+
+- Enable **System Settings → General → Sharing → Remote Login**, then under its info button turn on **Allow full disk access for remote users**. Without it, macOS blocks SSH sessions from reading removable volumes.
+- Install ffmpeg with `brew install ffmpeg`.
+- Authorize the public key for `key_file` for the SSH user.
+
+To convert selected videos on the Mac before they upload, add a template:
+
+```toml
+[media_ingest.transcode]
+  template = "/root/.bungalo/media_ingest/transcode.sh"
+  output_suffix = "_HQ.mp4"
+  work_dir = "/Volumes/Scratch/bungalo"
+```
+
+The template is a shell script stored on the Bungalo server, so use its container path. It runs on the Mac under `/bin/sh -e` once per selected video, and is re-read for each request, so edits apply without a restart. Quote its two variables so any filename is safe:
+
+```sh
+ffmpeg -hide_banner -i "$INPUT" \
+  -map 0:v:0 -map '0:a?' \
+  -vf format=yuv420p10le \
+  -c:v hevc_videotoolbox -profile:v main10 -tag:v hvc1 \
+  -b:v 25M -maxrate 40M -bufsize 60M \
+  -c:a aac -b:a 192k \
+  -movflags +faststart \
+  "$OUTPUT"
+```
+
+`output_suffix` replaces the source's extension to name the upload, so `C0001.MOV` becomes `C0001_HQ.mp4`; Studio must accept the extension it ends in. `work_dir` needs room for the largest output, and defaults to `/tmp/bungalo-media-ingest` on the Mac's boot disk. Each output is deleted once its upload finishes or fails, so a transcoded video that fails starts over when requested again. If a transcode fails, that video is reported in the thread and the rest continue. A bad or missing template is reported in the thread and nothing is uploaded.
+
+The Slack app needs the `files:write` scope, which is in `slack_manifest.json`; reinstall the app after adding it. Run this on its own with `bungalo media-ingest`, or add `[media_ingest]` to include it in `run-all`. What has been announced is recorded in `~/.bungalo/media_ingest/state.json`. Delete it to have everything announced again.
+
 ### Home Assistant
 
 Enable Home Assistant by setting `enabled = true` in your config:

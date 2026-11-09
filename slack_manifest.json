@@ -14,7 +14,8 @@
                 "incoming-webhook",
                 "chat:write",
                 "channels:read",
-                "channels:history"
+                "channels:history",
+                "files:write"
             ]
         }
     },
